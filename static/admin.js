@@ -1,43 +1,35 @@
 (function () {
 	"use strict";
 
-	const tokenStorageKey = "dongyi_api_admin_token";
+	const tokenStorageKey = "dongyi_api_admin_session_token";
+	const legacyTokenStorageKey = "dongyi_api_admin_token";
+	const namePattern = /^[A-Za-z0-9_-]{1,64}$/;
+
 	const state = {
 		handles: [],
-		selectedHandle: null,
-		token: localStorage.getItem(tokenStorageKey) || "",
+		token: sessionStorage.getItem(tokenStorageKey) || "",
 		tokenConfigured: false,
+		unlocked: false,
 	};
 
 	const $ = (selector, root = document) => root.querySelector(selector);
 	const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
 	const elements = {
-		adminToken: $("#adminToken"),
-		tokenForm: $("#tokenForm"),
-		clearToken: $("#clearToken"),
-		tokenStatus: $("#tokenStatus"),
+		unlockScreen: $("#unlockScreen"),
+		appShell: $("#appShell"),
+		unlockForm: $("#unlockForm"),
+		unlockToken: $("#unlockToken"),
+		unlockStatus: $("#unlockStatus"),
+		lockButton: $("#lockButton"),
 		handleCount: $("#handleCount"),
 		attributeCount: $("#attributeCount"),
-		selectedPath: $("#selectedPath"),
-		createHandleForm: $("#createHandleForm"),
-		newHandle: $("#newHandle"),
-		newHandleJson: $("#newHandleJson"),
 		refreshHandles: $("#refreshHandles"),
 		handlesList: $("#handlesList"),
-		emptyEditor: $("#emptyEditor"),
-		editorContent: $("#editorContent"),
-		renameHandleForm: $("#renameHandleForm"),
-		renameHandle: $("#renameHandle"),
-		openSelected: $("#openSelected"),
-		deleteHandle: $("#deleteHandle"),
-		selectedAttributeCount: $("#selectedAttributeCount"),
-		attributesList: $("#attributesList"),
-		addAttributeForm: $("#addAttributeForm"),
-		newAttribute: $("#newAttribute"),
-		newAttributeValue: $("#newAttributeValue"),
-		fullJsonForm: $("#fullJsonForm"),
-		fullJson: $("#fullJson"),
+		createHandleForm: $("#createHandleForm"),
+		newHandle: $("#newHandle"),
+		createPairs: $("#createPairs"),
+		addCreatePair: $("#addCreatePair"),
 		toast: $("#toast"),
 	};
 
@@ -51,46 +43,78 @@
 		}, 3200);
 	}
 
+	function setUnlockStatus(message, tone) {
+		elements.unlockStatus.textContent = message;
+		elements.unlockStatus.className = `form-note${tone ? ` ${tone}` : ""}`;
+	}
+
 	function normalizeName(value) {
 		return value.trim().replace(/^\/+|\/+$/g, "");
 	}
 
-	function parseJsonish(raw) {
+	function validateName(value, label) {
+		if (!namePattern.test(value)) {
+			throw new Error(`${label} must be 1-64 letters, numbers, underscores, or hyphens.`);
+		}
+		return value;
+	}
+
+	function parseFlatValue(raw) {
 		const trimmed = raw.trim();
 		if (trimmed === "") {
 			return "";
 		}
-		try {
-			return JSON.parse(trimmed);
-		} catch (_error) {
-			return trimmed;
-		}
-	}
 
-	function parseJsonObject(raw) {
-		const parsed = JSON.parse(raw);
-		if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-			throw new Error("Expected a JSON object.");
+		let parsed;
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch (_error) {
+			return raw;
+		}
+
+		if (parsed && typeof parsed === "object") {
+			throw new Error("Values must stay flat. Objects and arrays are not allowed inside a handle.");
 		}
 		return parsed;
 	}
 
-	function formatJson(value) {
-		return JSON.stringify(value, null, 2);
+	function valueToInput(value) {
+		if (typeof value === "string") {
+			return value;
+		}
+		return JSON.stringify(value);
 	}
 
-	function adminHeaders() {
-		return {
-			"Content-Type": "application/json",
-			"X-Admin-Token": state.token,
-		};
+	function valueType(value) {
+		if (value === null) {
+			return "null";
+		}
+		if (Array.isArray(value)) {
+			return "array";
+		}
+		return typeof value;
+	}
+
+	function displayValue(value) {
+		if (typeof value === "string") {
+			return value === "" ? '""' : value;
+		}
+		return JSON.stringify(value);
+	}
+
+	function adminHeaders(hasBody) {
+		const headers = { "X-Admin-Token": state.token };
+		if (hasBody) {
+			headers["Content-Type"] = "application/json";
+		}
+		return headers;
 	}
 
 	async function requestJson(url, options = {}) {
 		const response = await fetch(url, {
 			...options,
 			headers: {
-				...(options.body ? adminHeaders() : { "X-Admin-Token": state.token }),
+				...adminHeaders(Boolean(options.body)),
 				...(options.headers || {}),
 			},
 		});
@@ -108,6 +132,9 @@
 
 		if (!response.ok) {
 			const detail = payload && payload.detail ? payload.detail : `${response.status} ${response.statusText}`;
+			if (response.status === 401) {
+				lockApp("Token was rejected. Enter the admin token to unlock again.");
+			}
 			throw new Error(detail);
 		}
 		return payload;
@@ -117,46 +144,91 @@
 		const response = await fetch("/_admin/api/config");
 		const config = await response.json();
 		state.tokenConfigured = Boolean(config.admin_token_configured);
+
 		if (!state.tokenConfigured) {
-			elements.tokenStatus.textContent = "Set API_ADMIN_TOKEN in systemd before editing is enabled.";
-			elements.tokenStatus.className = "form-note warning";
+			setUnlockStatus("API_ADMIN_TOKEN is not set on the server, so admin editing is disabled.", "warning");
 			return;
 		}
 
 		if (state.token) {
-			elements.adminToken.value = state.token;
-			elements.tokenStatus.textContent = "Token loaded from this browser.";
-			elements.tokenStatus.className = "form-note ok";
-			await loadHandles();
-		} else {
-			elements.tokenStatus.textContent = "Enter the server admin token to load and save APIs.";
-			elements.tokenStatus.className = "form-note";
-		}
-	}
-
-	async function loadHandles() {
-		if (!state.token) {
-			showToast("Enter the admin token first.", true);
+			elements.unlockToken.value = state.token;
+			setUnlockStatus("Unlocking with this browser session...", "");
+			await unlockWithToken(state.token, true);
 			return;
 		}
 
-		const data = await requestJson("/_admin/api/handles");
+		setUnlockStatus("Enter the server admin token to unlock the manager.", "");
+	}
+
+	async function unlockWithToken(token, quiet) {
+		state.token = token.trim();
+		if (!state.token) {
+			setUnlockStatus("Enter the server admin token to unlock the manager.", "warning");
+			return;
+		}
+
+		try {
+			const data = await requestJson("/_admin/api/handles");
+			sessionStorage.setItem(tokenStorageKey, state.token);
+			setUnlocked(data);
+			if (!quiet) {
+				showToast("Unlocked.");
+			}
+		} catch (error) {
+			state.token = "";
+			sessionStorage.removeItem(tokenStorageKey);
+			setLocked("Token was not accepted. Check it and try again.", "warning");
+			if (!quiet) {
+				showToast(error.message, true);
+			}
+		}
+	}
+
+	function setUnlocked(data) {
+		state.unlocked = true;
+		document.body.classList.remove("is-locked");
+		document.body.classList.add("is-unlocked");
+		elements.unlockScreen.hidden = true;
+		elements.appShell.hidden = false;
+		applyHandlesData(data);
+	}
+
+	function setLocked(message, tone) {
+		state.unlocked = false;
+		state.handles = [];
+		document.body.classList.add("is-locked");
+		document.body.classList.remove("is-unlocked");
+		elements.appShell.hidden = true;
+		elements.unlockScreen.hidden = false;
+		elements.handleCount.textContent = "0";
+		elements.attributeCount.textContent = "0";
+		renderHandles();
+		if (message) {
+			setUnlockStatus(message, tone);
+		}
+	}
+
+	function lockApp(message) {
+		state.token = "";
+		sessionStorage.removeItem(tokenStorageKey);
+		elements.unlockToken.value = "";
+		setLocked(message || "Locked. Enter the admin token to unlock the manager.", "");
+	}
+
+	function applyHandlesData(data) {
 		state.handles = data.handles || [];
 		elements.handleCount.textContent = data.handle_count || 0;
 		elements.attributeCount.textContent = data.attribute_count || 0;
 		renderHandles();
-
-		if (state.selectedHandle && !findHandle(state.selectedHandle)) {
-			state.selectedHandle = null;
-		}
-		if (!state.selectedHandle && state.handles.length > 0) {
-			state.selectedHandle = state.handles[0].handle;
-		}
-		renderEditor();
 	}
 
-	function findHandle(handle) {
-		return state.handles.find((item) => item.handle === handle);
+	async function loadHandles() {
+		if (!state.token) {
+			lockApp("Enter the admin token to unlock the manager.");
+			return;
+		}
+		const data = await requestJson("/_admin/api/handles");
+		applyHandlesData(data);
 	}
 
 	function publicUrl(path) {
@@ -164,88 +236,156 @@
 	}
 
 	function renderHandles() {
-		if (state.handles.length === 0) {
-			elements.handlesList.innerHTML = '<div class="empty-state">No handles yet.</div>';
+		elements.handlesList.innerHTML = "";
+
+		if (!state.unlocked) {
 			return;
 		}
 
-		elements.handlesList.innerHTML = "";
+		if (state.handles.length === 0) {
+			elements.handlesList.innerHTML = '<div class="empty-state">No handles yet. Create one below to start serving JSON.</div>';
+			return;
+		}
+
 		state.handles.forEach((item) => {
-			const button = document.createElement("button");
-			button.type = "button";
-			button.className = "handle-item";
-			button.classList.toggle("active", item.handle === state.selectedHandle);
-			button.innerHTML = `
-				<span class="handle-path">${item.path}</span>
-				<span class="handle-meta">${item.attribute_count} attributes</span>
-			`;
-			button.addEventListener("click", () => {
-				state.selectedHandle = item.handle;
-				renderHandles();
-				renderEditor();
-			});
-			elements.handlesList.appendChild(button);
+			elements.handlesList.appendChild(renderHandleCard(item));
 		});
 	}
 
-	function renderEditor() {
-		const selected = state.selectedHandle ? findHandle(state.selectedHandle) : null;
-		if (!selected) {
-			elements.emptyEditor.hidden = false;
-			elements.editorContent.hidden = true;
-			elements.openSelected.href = "#";
-			elements.selectedPath.textContent = "none";
-			return;
-		}
+	function renderHandleCard(item) {
+		const card = document.createElement("article");
+		card.className = "handle-card";
 
-		elements.emptyEditor.hidden = true;
-		elements.editorContent.hidden = false;
-		elements.renameHandle.value = selected.handle;
-		elements.openSelected.href = publicUrl(selected.path);
-		elements.selectedPath.textContent = selected.path;
-		elements.fullJson.value = formatJson(selected.attributes);
+		card.innerHTML = `
+			<div class="handle-card-header">
+				<div>
+					<p class="handle-path">${escapeHtml(item.path)}</p>
+					<p class="handle-meta">${item.attribute_count} ${item.attribute_count === 1 ? "pair" : "pairs"} at <code>GET/POST ${escapeHtml(item.path)}</code></p>
+				</div>
+				<div class="handle-actions">
+					<a class="button small" href="${escapeHtml(publicUrl(item.path))}" target="_blank" rel="noreferrer">Open API</a>
+					<button type="button" class="button small danger" data-delete-handle>Delete handle</button>
+				</div>
+			</div>
 
-		const entries = Object.entries(selected.attributes);
-		elements.selectedAttributeCount.textContent = `${entries.length} ${entries.length === 1 ? "attribute" : "attributes"}`;
-		elements.attributesList.innerHTML = "";
+			<form class="handle-rename-form">
+				<label>Handle path</label>
+				<div class="inline-controls">
+					<div class="prefixed-input grow">
+						<span>/</span>
+						<input name="handle" type="text" pattern="[A-Za-z0-9_-]{1,64}" required />
+					</div>
+					<button type="submit" class="button small">Save path</button>
+				</div>
+			</form>
+
+			<div class="kv-list"></div>
+
+			<form class="add-pair-form">
+				<label>Add key/value pair</label>
+				<div class="kv-row add-row">
+					<input name="attribute" type="text" placeholder="key" pattern="[A-Za-z0-9_-]{1,64}" required aria-label="New key" />
+					<textarea name="value" rows="2" spellcheck="false" placeholder="value" aria-label="New value"></textarea>
+					<button type="submit" class="button primary small">Add pair</button>
+				</div>
+			</form>
+		`;
+
+		$('input[name="handle"]', card).value = item.handle;
+		const keyValueList = $(".kv-list", card);
+		const entries = Object.entries(item.attributes);
 
 		if (entries.length === 0) {
-			elements.attributesList.innerHTML = '<div class="empty-state">This handle has no attributes.</div>';
-			return;
+			keyValueList.innerHTML = '<div class="empty-state compact">This handle currently returns <code>{}</code>.</div>';
+		} else {
+			const header = document.createElement("div");
+			header.className = "kv-header";
+			header.innerHTML = "<span>Key</span><span>Value</span><span>Type</span><span>Actions</span>";
+			keyValueList.appendChild(header);
+			entries.forEach(([attribute, value]) => {
+				keyValueList.appendChild(renderAttributeRow(item, attribute, value));
+			});
 		}
 
-		entries.forEach(([attribute, value]) => {
-			const row = document.createElement("form");
-			row.className = "attribute-row";
-			row.dataset.attribute = attribute;
-			row.innerHTML = `
-				<label>Attribute</label>
-				<input name="attribute" value="${escapeHtml(attribute)}" pattern="[A-Za-z0-9_-]{1,64}" required />
-				<label>Value</label>
-				<textarea name="value" rows="3" spellcheck="false">${escapeHtml(formatJson(value))}</textarea>
-				<button type="submit" class="button small">Save</button>
-				<button type="button" class="button small danger" data-delete-attribute>Delete</button>
-			`;
-			row.addEventListener("submit", saveAttribute);
-			$("[data-delete-attribute]", row).addEventListener("click", () => deleteAttribute(attribute));
-			elements.attributesList.appendChild(row);
-		});
+		$(".handle-rename-form", card).addEventListener("submit", (event) => renameHandle(event, item.handle));
+		$("[data-delete-handle]", card).addEventListener("click", () => deleteHandle(item.handle));
+		$(".add-pair-form", card).addEventListener("submit", (event) => addAttribute(event, item));
+
+		return card;
 	}
 
-	function escapeHtml(value) {
-		return String(value)
-			.replaceAll("&", "&amp;")
-			.replaceAll("<", "&lt;")
-			.replaceAll(">", "&gt;")
-			.replaceAll('"', "&quot;");
+	function renderAttributeRow(item, attribute, value) {
+		const row = document.createElement("form");
+		row.className = "kv-row";
+		row.dataset.attribute = attribute;
+
+		row.innerHTML = `
+			<input name="attribute" type="text" pattern="[A-Za-z0-9_-]{1,64}" required aria-label="Key" />
+			<textarea name="value" rows="2" spellcheck="false" aria-label="Value"></textarea>
+			<span class="value-type" title="${escapeHtml(displayValue(value))}">${escapeHtml(valueType(value))}</span>
+			<div class="row-actions">
+				<button type="submit" class="button small">Save</button>
+				<button type="button" class="button small danger" data-delete-attribute>Delete</button>
+			</div>
+		`;
+
+		$('input[name="attribute"]', row).value = attribute;
+		$('textarea[name="value"]', row).value = valueToInput(value);
+		row.addEventListener("submit", (event) => saveAttribute(event, item));
+		$("[data-delete-attribute]", row).addEventListener("click", () => deleteAttribute(item.handle, attribute));
+		return row;
+	}
+
+	function addCreatePairRow(attribute = "", value = "") {
+		const row = document.createElement("div");
+		row.className = "pair-row";
+		row.innerHTML = `
+			<label>
+				<span>Key</span>
+				<input name="attribute" type="text" placeholder="value" pattern="[A-Za-z0-9_-]{1,64}" required />
+			</label>
+			<label>
+				<span>Value</span>
+				<textarea name="value" rows="2" spellcheck="false" placeholder="42"></textarea>
+			</label>
+			<button type="button" class="button small danger" data-remove-pair>Remove</button>
+		`;
+		$('input[name="attribute"]', row).value = attribute;
+		$('textarea[name="value"]', row).value = value;
+		$("[data-remove-pair]", row).addEventListener("click", () => {
+			row.remove();
+		});
+		elements.createPairs.appendChild(row);
+	}
+
+	function resetCreateForm() {
+		elements.createHandleForm.reset();
+		elements.createPairs.innerHTML = "";
+		addCreatePairRow("value", "42");
+	}
+
+	function collectCreateAttributes() {
+		const attributes = {};
+		const rows = $$(".pair-row", elements.createPairs);
+
+		rows.forEach((row) => {
+			const attribute = validateName(normalizeName($('input[name="attribute"]', row).value), "Key");
+			if (Object.prototype.hasOwnProperty.call(attributes, attribute)) {
+				throw new Error(`Duplicate key '${attribute}'.`);
+			}
+			attributes[attribute] = parseFlatValue($('textarea[name="value"]', row).value);
+		});
+
+		return attributes;
 	}
 
 	async function createHandle(event) {
 		event.preventDefault();
-		const handle = normalizeName(elements.newHandle.value);
+		let handle;
 		let attributes;
 		try {
-			attributes = parseJsonObject(elements.newHandleJson.value);
+			handle = validateName(normalizeName(elements.newHandle.value), "Handle");
+			attributes = collectCreateAttributes();
 		} catch (error) {
 			showToast(error.message, true);
 			return;
@@ -256,183 +396,168 @@
 				method: "POST",
 				body: JSON.stringify({ handle, attributes }),
 			});
-			state.selectedHandle = handle;
-			elements.newHandle.value = "";
+			resetCreateForm();
 			await loadHandles();
+			window.location.hash = "handles";
 			showToast(`Created /${handle}.`);
 		} catch (error) {
 			showToast(error.message, true);
 		}
 	}
 
-	async function renameHandle(event) {
+	async function renameHandle(event, currentHandle) {
 		event.preventDefault();
-		const selected = state.selectedHandle;
-		const nextHandle = normalizeName(elements.renameHandle.value);
-		if (!selected || !nextHandle) {
+		let nextHandle;
+		try {
+			nextHandle = validateName(normalizeName($('input[name="handle"]', event.currentTarget).value), "Handle");
+		} catch (error) {
+			showToast(error.message, true);
+			return;
+		}
+
+		if (nextHandle === currentHandle) {
+			showToast(`/${currentHandle} is already saved.`);
 			return;
 		}
 
 		try {
-			await requestJson(`/_admin/api/handles/${encodeURIComponent(selected)}`, {
+			await requestJson(`/_admin/api/handles/${encodeURIComponent(currentHandle)}`, {
 				method: "PATCH",
 				body: JSON.stringify({ handle: nextHandle }),
 			});
-			state.selectedHandle = nextHandle;
 			await loadHandles();
-			showToast(`Renamed to /${nextHandle}.`);
+			showToast(`Renamed /${currentHandle} to /${nextHandle}.`);
 		} catch (error) {
 			showToast(error.message, true);
 		}
 	}
 
-	async function deleteSelectedHandle() {
-		const selected = state.selectedHandle;
-		if (!selected) {
-			return;
-		}
-		if (!window.confirm(`Delete /${selected} and all of its attributes?`)) {
+	async function deleteHandle(handle) {
+		if (!window.confirm(`Delete /${handle} and all of its key/value pairs?`)) {
 			return;
 		}
 
 		try {
-			await requestJson(`/_admin/api/handles/${encodeURIComponent(selected)}`, { method: "DELETE" });
-			state.selectedHandle = null;
+			await requestJson(`/_admin/api/handles/${encodeURIComponent(handle)}`, { method: "DELETE" });
 			await loadHandles();
-			showToast(`Deleted /${selected}.`);
+			showToast(`Deleted /${handle}.`);
 		} catch (error) {
 			showToast(error.message, true);
 		}
 	}
 
-	async function saveAttribute(event) {
+	async function saveAttribute(event, item) {
 		event.preventDefault();
-		const selected = state.selectedHandle;
 		const row = event.currentTarget;
 		const oldAttribute = row.dataset.attribute;
-		const nextAttribute = normalizeName($('input[name="attribute"]', row).value);
-		const nextValue = parseJsonish($('textarea[name="value"]', row).value);
-		const body = { attribute: nextAttribute, value: nextValue };
+		let nextAttribute;
+		let nextValue;
+		try {
+			nextAttribute = validateName(normalizeName($('input[name="attribute"]', row).value), "Key");
+			if (nextAttribute !== oldAttribute && Object.prototype.hasOwnProperty.call(item.attributes, nextAttribute)) {
+				throw new Error(`Key '${nextAttribute}' already exists on /${item.handle}.`);
+			}
+			nextValue = parseFlatValue($('textarea[name="value"]', row).value);
+		} catch (error) {
+			showToast(error.message, true);
+			return;
+		}
 
 		try {
-			await requestJson(`/_admin/api/handles/${encodeURIComponent(selected)}/attributes/${encodeURIComponent(oldAttribute)}`, {
+			await requestJson(`/_admin/api/handles/${encodeURIComponent(item.handle)}/attributes/${encodeURIComponent(oldAttribute)}`, {
 				method: "PATCH",
-				body: JSON.stringify(body),
+				body: JSON.stringify({ attribute: nextAttribute, value: nextValue }),
 			});
 			await loadHandles();
-			showToast(`Saved ${nextAttribute}.`);
+			showToast(`Saved ${nextAttribute} on /${item.handle}.`);
 		} catch (error) {
 			showToast(error.message, true);
 		}
 	}
 
-	async function deleteAttribute(attribute) {
-		const selected = state.selectedHandle;
-		if (!selected || !window.confirm(`Delete attribute '${attribute}' from /${selected}?`)) {
-			return;
-		}
-
-		try {
-			await requestJson(`/_admin/api/handles/${encodeURIComponent(selected)}/attributes/${encodeURIComponent(attribute)}`, {
-				method: "DELETE",
-			});
-			await loadHandles();
-			showToast(`Deleted ${attribute}.`);
-		} catch (error) {
-			showToast(error.message, true);
-		}
-	}
-
-	async function addAttribute(event) {
+	async function addAttribute(event, item) {
 		event.preventDefault();
-		const selected = state.selectedHandle;
-		const attribute = normalizeName(elements.newAttribute.value);
-		const value = parseJsonish(elements.newAttributeValue.value);
-		if (!selected) {
-			showToast("Select a handle first.", true);
+		const form = event.currentTarget;
+		let attribute;
+		let value;
+		try {
+			attribute = validateName(normalizeName($('input[name="attribute"]', form).value), "Key");
+			if (Object.prototype.hasOwnProperty.call(item.attributes, attribute)) {
+				throw new Error(`Key '${attribute}' already exists on /${item.handle}. Edit its row instead.`);
+			}
+			value = parseFlatValue($('textarea[name="value"]', form).value);
+		} catch (error) {
+			showToast(error.message, true);
 			return;
 		}
 
 		try {
-			await requestJson(`/_admin/api/handles/${encodeURIComponent(selected)}/attributes/${encodeURIComponent(attribute)}`, {
+			await requestJson(`/_admin/api/handles/${encodeURIComponent(item.handle)}/attributes/${encodeURIComponent(attribute)}`, {
 				method: "PUT",
 				body: JSON.stringify({ value }),
 			});
-			elements.newAttribute.value = "";
-			elements.newAttributeValue.value = "43";
+			form.reset();
 			await loadHandles();
-			showToast(`Added ${attribute}.`);
+			showToast(`Added ${attribute} to /${item.handle}.`);
 		} catch (error) {
 			showToast(error.message, true);
 		}
 	}
 
-	async function saveFullJson(event) {
-		event.preventDefault();
-		const selected = state.selectedHandle;
-		let attributes;
-		try {
-			attributes = parseJsonObject(elements.fullJson.value);
-		} catch (error) {
-			showToast(error.message, true);
+	async function deleteAttribute(handle, attribute) {
+		if (!window.confirm(`Delete key '${attribute}' from /${handle}?`)) {
 			return;
 		}
 
 		try {
-			await requestJson(`/_admin/api/handles/${encodeURIComponent(selected)}`, {
-				method: "PUT",
-				body: JSON.stringify({ attributes }),
+			await requestJson(`/_admin/api/handles/${encodeURIComponent(handle)}/attributes/${encodeURIComponent(attribute)}`, {
+				method: "DELETE",
 			});
 			await loadHandles();
-			showToast(`Saved /${selected}.`);
+			showToast(`Deleted ${attribute} from /${handle}.`);
 		} catch (error) {
 			showToast(error.message, true);
 		}
 	}
 
-	function saveToken(event) {
-		event.preventDefault();
-		state.token = elements.adminToken.value.trim();
-		if (state.token) {
-			localStorage.setItem(tokenStorageKey, state.token);
-			elements.tokenStatus.textContent = "Token saved in this browser.";
-			elements.tokenStatus.className = "form-note ok";
-			loadHandles().catch((error) => showToast(error.message, true));
-		}
-	}
-
-	function clearToken() {
-		state.token = "";
-		localStorage.removeItem(tokenStorageKey);
-		elements.adminToken.value = "";
-		state.handles = [];
-		state.selectedHandle = null;
-		elements.tokenStatus.textContent = "Token cleared.";
-		elements.tokenStatus.className = "form-note";
-		renderHandles();
-		renderEditor();
-		elements.handleCount.textContent = "-";
-		elements.attributeCount.textContent = "-";
+	function escapeHtml(value) {
+		return String(value)
+			.replaceAll("&", "&amp;")
+			.replaceAll("<", "&lt;")
+			.replaceAll(">", "&gt;")
+			.replaceAll('"', "&quot;");
 	}
 
 	function bindEvents() {
-		elements.tokenForm.addEventListener("submit", saveToken);
-		elements.clearToken.addEventListener("click", clearToken);
-		elements.refreshHandles.addEventListener("click", () => {
-			loadHandles().catch((error) => showToast(error.message, true));
+		elements.unlockForm.addEventListener("submit", (event) => {
+			event.preventDefault();
+			unlockWithToken(elements.unlockToken.value, false);
 		});
+		elements.lockButton.addEventListener("click", () => lockApp());
+		elements.refreshHandles.addEventListener("click", () => {
+			loadHandles().then(() => showToast("Refreshed.")).catch((error) => showToast(error.message, true));
+		});
+		elements.addCreatePair.addEventListener("click", () => addCreatePairRow());
 		elements.createHandleForm.addEventListener("submit", createHandle);
-		elements.renameHandleForm.addEventListener("submit", renameHandle);
-		elements.deleteHandle.addEventListener("click", deleteSelectedHandle);
-		elements.addAttributeForm.addEventListener("submit", addAttribute);
-		elements.fullJsonForm.addEventListener("submit", saveFullJson);
 	}
 
 	function init() {
+		try {
+			localStorage.removeItem(legacyTokenStorageKey);
+		} catch (_error) {
+			// Ignore storage policy failures; the session token is the only one used now.
+		}
+
 		bindEvents();
-		renderHandles();
-		renderEditor();
-		loadConfig().catch((error) => showToast(error.message, true));
+		resetCreateForm();
+		setLocked("", "");
+		if (state.token) {
+			elements.unlockToken.value = state.token;
+		}
+		loadConfig().catch((error) => {
+			setUnlockStatus("Could not reach the admin service.", "warning");
+			showToast(error.message, true);
+		});
 	}
 
 	document.addEventListener("DOMContentLoaded", init);

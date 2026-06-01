@@ -3,161 +3,124 @@
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<meta name="description" content="Management page for dynamic JSON APIs on api.dongyi-guo.top." />
+	<meta name="description" content="Management page for flat dynamic JSON APIs on api.dongyi-guo.top." />
 	<title>Dongyi API Manager</title>
 	<link rel="stylesheet" href="/admin-assets/admin.css" />
 	<script src="/admin-assets/admin.js" defer></script>
 </head>
-<body>
-	<aside class="sidebar" aria-label="API manager navigation">
-		<div class="sidebar-inner">
-			<a class="brand" href="#top" aria-label="Dongyi API Manager">
+<body class="is-locked">
+	<section id="unlockScreen" class="unlock-screen" aria-labelledby="unlockTitle">
+		<div class="unlock-card">
+			<a class="brand unlock-brand" href="/" aria-label="Dongyi API Manager">
 				<span class="brand-mark">API</span>
 				<span>Manager</span>
 			</a>
-			<nav>
-				<a href="#dashboard">Dashboard</a>
-				<a href="#create">Create</a>
-				<a href="#editor">Editor</a>
-				<a href="#reference">Reference</a>
-			</nav>
-		</div>
-	</aside>
-
-	<main id="top" class="shell">
-		<section id="dashboard" class="hero">
 			<p class="eyebrow">api.dongyi-guo.top</p>
-			<h1>API Manager</h1>
-			<p class="hero-summary">Create and maintain simple JSON endpoints like <code>/value</code>. Saved changes are written to the live FastAPI store and are available immediately.</p>
+			<h1 id="unlockTitle">Unlock API Manager</h1>
+			<p class="hero-summary">Enter the admin token before managing handles, keys, or values. The manager stays hidden until the token is accepted by the server.</p>
 
-			<div class="status-strip" aria-live="polite">
-				<div>
-					<span class="metric-value" id="handleCount">-</span>
-					<span class="metric-label">handles</span>
-				</div>
-				<div>
-					<span class="metric-value" id="attributeCount">-</span>
-					<span class="metric-label">attributes</span>
-				</div>
-				<div>
-					<span class="metric-value" id="selectedPath">none</span>
-					<span class="metric-label">selected</span>
-				</div>
-			</div>
-		</section>
-
-		<section class="panel auth-panel" aria-labelledby="authTitle">
-			<div>
-				<p class="section-eyebrow">Access</p>
-				<h2 id="authTitle">Admin Token</h2>
-			</div>
-			<form id="tokenForm" class="token-form">
-				<label for="adminToken">Token</label>
+			<form id="unlockForm" class="unlock-form">
+				<label for="unlockToken">Admin token</label>
 				<div class="inline-controls">
-					<input id="adminToken" name="adminToken" type="password" autocomplete="current-password" placeholder="API_ADMIN_TOKEN" />
-					<button type="submit" class="button primary">Use token</button>
-					<button type="button" id="clearToken" class="button quiet">Clear</button>
+					<input id="unlockToken" name="unlockToken" type="password" autocomplete="current-password" placeholder="API_ADMIN_TOKEN" required />
+					<button type="submit" class="button primary">Unlock</button>
 				</div>
-				<p id="tokenStatus" class="form-note">Checking service configuration...</p>
+				<p id="unlockStatus" class="form-note">Checking service configuration...</p>
 			</form>
-		</section>
 
-		<section class="workspace">
-			<section id="create" class="panel" aria-labelledby="createTitle">
+			<p class="flat-note">Handles return one-layer JSON objects only. Values can be strings, numbers, booleans, or null; nested objects and arrays are blocked.</p>
+		</div>
+	</section>
+
+	<div id="appShell" class="app-shell" hidden>
+		<aside class="sidebar" aria-label="API manager navigation">
+			<div class="sidebar-inner">
+				<a class="brand" href="#top" aria-label="Dongyi API Manager">
+					<span class="brand-mark">API</span>
+					<span>Manager</span>
+				</a>
+				<nav>
+					<a href="#handles">Handles</a>
+					<a href="#create">Create</a>
+					<a href="#reference">Reference</a>
+				</nav>
+				<button type="button" id="lockButton" class="button quiet small">Lock</button>
+			</div>
+		</aside>
+
+		<main id="top" class="shell">
+			<section id="dashboard" class="hero">
+				<p class="eyebrow">api.dongyi-guo.top</p>
+				<h1>API Manager</h1>
+				<p class="hero-summary">Create and maintain flat JSON endpoints like <code>/value</code>. Each handle is edited as rows of key/value pairs and is available immediately through public GET and POST routes.</p>
+
+				<div class="status-strip" aria-live="polite">
+					<div>
+						<span class="metric-value" id="handleCount">0</span>
+						<span class="metric-label">handles</span>
+					</div>
+					<div>
+						<span class="metric-value" id="attributeCount">0</span>
+						<span class="metric-label">key/value pairs</span>
+					</div>
+					<div>
+						<span class="metric-value">Flat</span>
+						<span class="metric-label">one-layer JSON only</span>
+					</div>
+				</div>
+			</section>
+
+			<section id="handles" class="panel handles-panel" aria-labelledby="handlesTitle">
+				<div class="section-heading compact">
+					<div>
+						<p class="section-eyebrow">List, edit, delete</p>
+						<h2 id="handlesTitle">Handles and Key/Value Pairs</h2>
+					</div>
+					<button type="button" id="refreshHandles" class="button small">Refresh</button>
+				</div>
+				<p class="form-note flat-rule">Edit a row to change a key or value. Values are parsed as JSON when possible, so <code>42</code>, <code>true</code>, and <code>null</code> keep their JSON types. Objects and arrays are rejected.</p>
+				<div id="handlesList" class="handles-list" aria-live="polite"></div>
+			</section>
+
+			<section id="create" class="panel create-panel" aria-labelledby="createTitle">
 				<div class="section-heading">
 					<p class="section-eyebrow">Create</p>
 					<h2 id="createTitle">New Handle</h2>
 				</div>
 				<form id="createHandleForm" class="stack">
-					<label for="newHandle">Handle</label>
+					<label for="newHandle">Handle path</label>
 					<div class="prefixed-input">
 						<span>/</span>
-						<input id="newHandle" name="newHandle" type="text" placeholder="temperature" pattern="[A-Za-z0-9_-]{1,64}" required />
+						<input id="newHandle" name="newHandle" type="text" placeholder="value" pattern="[A-Za-z0-9_-]{1,64}" required />
 					</div>
 
-					<label for="newHandleJson">Initial JSON Object</label>
-					<textarea id="newHandleJson" name="newHandleJson" rows="8" spellcheck="false">{
-  "value": 42
-}</textarea>
+					<div class="pair-heading">
+						<div>
+							<h3>Initial key/value pairs</h3>
+							<p class="form-note">Start with one or more flat pairs. You can add, edit, or delete more after creation.</p>
+						</div>
+						<button type="button" id="addCreatePair" class="button small">Add row</button>
+					</div>
+					<div id="createPairs" class="pairs-editor" aria-label="Initial key/value pairs"></div>
 
 					<button type="submit" class="button primary">Create handle</button>
 				</form>
 			</section>
 
-			<section class="panel handles-panel" aria-labelledby="handlesTitle">
-				<div class="section-heading compact">
-					<div>
-						<p class="section-eyebrow">Running</p>
-						<h2 id="handlesTitle">Handles</h2>
-					</div>
-					<button type="button" id="refreshHandles" class="button small">Refresh</button>
+			<section id="reference" class="panel reference-panel" aria-labelledby="referenceTitle">
+				<p class="section-eyebrow">Reference</p>
+				<h2 id="referenceTitle">Backend Routes</h2>
+				<div class="route-grid">
+					<div><code>GET /{handle}</code><span>Public endpoint, returns the handle JSON object.</span></div>
+					<div><code>POST /{handle}</code><span>Public endpoint, returns the same handle JSON object.</span></div>
+					<div><code>POST /_admin/api/handles</code><span>Create a handle with flat key/value pairs.</span></div>
+					<div><code>PATCH /_admin/api/handles/{handle}</code><span>Rename a handle.</span></div>
+					<div><code>PUT /_admin/api/handles/{handle}/attributes/{key}</code><span>Add or update one key/value pair.</span></div>
+					<div><code>DELETE /_admin/api/handles/{handle}</code><span>Delete a handle and all of its pairs.</span></div>
 				</div>
-				<div id="handlesList" class="handles-list" aria-live="polite"></div>
 			</section>
-		</section>
-
-		<section id="editor" class="panel editor-panel" aria-labelledby="editorTitle">
-			<div class="section-heading compact">
-				<div>
-					<p class="section-eyebrow">Modify</p>
-					<h2 id="editorTitle">Selected Handle</h2>
-				</div>
-				<div class="editor-actions">
-					<a id="openSelected" class="button small" href="#" target="_blank" rel="noreferrer">Open API</a>
-					<button type="button" id="deleteHandle" class="button small danger">Delete</button>
-				</div>
-			</div>
-
-			<div id="emptyEditor" class="empty-state">Select a handle to edit it.</div>
-
-			<div id="editorContent" class="editor-content" hidden>
-				<form id="renameHandleForm" class="rename-form">
-					<label for="renameHandle">Handle path</label>
-					<div class="inline-controls">
-						<div class="prefixed-input grow">
-							<span>/</span>
-							<input id="renameHandle" name="renameHandle" type="text" pattern="[A-Za-z0-9_-]{1,64}" required />
-						</div>
-						<button type="submit" class="button">Rename</button>
-					</div>
-				</form>
-
-				<div class="attributes-header">
-					<h3>Attributes</h3>
-					<span id="selectedAttributeCount">0 attributes</span>
-				</div>
-				<div id="attributesList" class="attributes-list"></div>
-
-				<form id="addAttributeForm" class="add-attribute-form">
-					<label for="newAttribute">New attribute</label>
-					<div class="attribute-grid">
-						<input id="newAttribute" name="newAttribute" type="text" placeholder="another_val" pattern="[A-Za-z0-9_-]{1,64}" required />
-						<textarea id="newAttributeValue" name="newAttributeValue" rows="3" spellcheck="false">43</textarea>
-						<button type="submit" class="button primary">Add</button>
-					</div>
-				</form>
-
-				<form id="fullJsonForm" class="full-json-form">
-					<label for="fullJson">Full JSON object</label>
-					<textarea id="fullJson" name="fullJson" rows="10" spellcheck="false"></textarea>
-					<button type="submit" class="button">Save full JSON</button>
-				</form>
-			</div>
-		</section>
-
-		<section id="reference" class="panel reference-panel" aria-labelledby="referenceTitle">
-			<p class="section-eyebrow">Reference</p>
-			<h2 id="referenceTitle">Backend Routes</h2>
-			<div class="route-grid">
-				<div><code>GET /{handle}</code><span>Public endpoint, returns the handle JSON object.</span></div>
-				<div><code>POST /_admin/api/handles</code><span>Create a handle.</span></div>
-				<div><code>PUT /_admin/api/handles/{handle}</code><span>Replace all attributes in a handle.</span></div>
-				<div><code>PATCH /_admin/api/handles/{handle}</code><span>Rename a handle.</span></div>
-				<div><code>PUT /_admin/api/handles/{handle}/attributes/{attribute}</code><span>Add or update one attribute.</span></div>
-				<div><code>DELETE /_admin/api/handles/{handle}</code><span>Delete a handle.</span></div>
-			</div>
-		</section>
-	</main>
+		</main>
+	</div>
 
 	<div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>

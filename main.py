@@ -53,8 +53,8 @@ class AttributeValue(BaseModel):
 
 app = FastAPI(
     title="Dongyi API Manager",
-    description="Dynamic JSON endpoints managed from the api.dongyi-guo.top home page.",
-    version="1.0.0",
+    description="Dynamic flat JSON endpoints managed from the api.dongyi-guo.top home page.",
+    version="1.1.0",
 )
 
 
@@ -69,7 +69,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins(),
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -104,6 +104,11 @@ def validate_attribute(attribute: str) -> str:
 
 
 def ensure_json_value(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        raise HTTPException(
+            status_code=400,
+            detail="Values must be flat: use a string, number, boolean, or null. Nested objects and arrays are not allowed.",
+        )
     try:
         json.dumps(value, allow_nan=False)
     except (TypeError, ValueError) as exc:
@@ -198,6 +203,7 @@ def admin_config() -> Dict[str, Any]:
         "admin_token_configured": bool(ADMIN_TOKEN),
         "handle_pattern": HANDLE_RE.pattern,
         "attribute_pattern": ATTRIBUTE_RE.pattern,
+        "flat_values_only": True,
     }
 
 
@@ -342,10 +348,19 @@ def delete_attribute(handle: str, attribute: str) -> Response:
     return Response(status_code=204)
 
 
-@app.get("/{handle}", include_in_schema=False)
-def get_dynamic_handle(handle: str) -> JSONResponse:
+def dynamic_handle_response(handle: str) -> JSONResponse:
     handle = validate_handle(handle, public_lookup=True)
     store = read_store()
     if handle not in store:
         raise HTTPException(status_code=404, detail=f"Handle '/{handle}' does not exist.")
     return JSONResponse(content=store[handle])
+
+
+@app.get("/{handle}", include_in_schema=False)
+def get_dynamic_handle(handle: str) -> JSONResponse:
+    return dynamic_handle_response(handle)
+
+
+@app.post("/{handle}", include_in_schema=False)
+def post_dynamic_handle(handle: str) -> JSONResponse:
+    return dynamic_handle_response(handle)
