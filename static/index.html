@@ -70,6 +70,16 @@
 				</div>
 			</section>
 
+			<section id="storeAlert" class="panel store-alert" aria-labelledby="storeAlertTitle" hidden>
+				<div>
+					<p class="section-eyebrow">Store needs repair</p>
+					<h2 id="storeAlertTitle">api_store.json could not be loaded</h2>
+					<p id="storeErrorText" class="store-error-text"></p>
+					<p class="form-note">The server file must be a JSON object shaped like <code>{ "handle": { "key": "value" } }</code>. Resetting will copy the current broken file to a timestamped backup, then restore the default <code>/value</code> handle.</p>
+				</div>
+				<button type="button" id="resetStore" class="button danger">Reset store</button>
+			</section>
+
 			<section id="handles" class="panel handles-panel" aria-labelledby="handlesTitle">
 				<div class="section-heading compact">
 					<div>

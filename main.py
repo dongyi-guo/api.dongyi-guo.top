@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -128,7 +129,7 @@ def read_store_unlocked() -> Dict[str, Dict[str, Any]]:
         write_store_unlocked(default_store())
 
     try:
-        raw = json.loads(STORE_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(STORE_PATH.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"API store JSON is invalid: {exc}") from exc
 
@@ -150,6 +151,21 @@ def write_store_unlocked(store: Dict[str, Dict[str, Any]]) -> None:
     tmp_path = STORE_PATH.with_name(f"{STORE_PATH.name}.tmp")
     tmp_path.write_text(payload, encoding="utf-8")
     os.replace(tmp_path, STORE_PATH)
+
+
+def backup_store_unlocked() -> Optional[str]:
+    if not STORE_PATH.exists():
+        return None
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    backup_path = STORE_PATH.with_name(f"{STORE_PATH.name}.broken-{timestamp}")
+    counter = 1
+    while backup_path.exists():
+        backup_path = STORE_PATH.with_name(f"{STORE_PATH.name}.broken-{timestamp}-{counter}")
+        counter += 1
+
+    backup_path.write_bytes(STORE_PATH.read_bytes())
+    return str(backup_path)
 
 
 def read_store() -> Dict[str, Dict[str, Any]]:
@@ -184,6 +200,17 @@ def handle_summary(handle: str, attributes: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def handles_payload(store: Dict[str, Dict[str, Any]], **extra: Any) -> Dict[str, Any]:
+    handles = [handle_summary(handle, store[handle]) for handle in sorted(store)]
+    attribute_count = sum(len(attributes) for attributes in store.values())
+    return {
+        "handles": handles,
+        "handle_count": len(handles),
+        "attribute_count": attribute_count,
+        **extra,
+    }
+
+
 @app.get("/", include_in_schema=False)
 def home() -> FileResponse:
     index_path = STATIC_DIR / "index.html"
@@ -207,16 +234,34 @@ def admin_config() -> Dict[str, Any]:
     }
 
 
+@app.get("/_admin/api/session", dependencies=[Depends(require_admin)], include_in_schema=False)
+def admin_session() -> Dict[str, Any]:
+    return {
+        "authenticated": True,
+        "store_path": str(STORE_PATH),
+        "flat_values_only": True,
+    }
+
+
 @app.get("/_admin/api/handles", dependencies=[Depends(require_admin)])
 def list_handles() -> Dict[str, Any]:
     store = read_store()
-    handles = [handle_summary(handle, store[handle]) for handle in sorted(store)]
-    attribute_count = sum(len(attributes) for attributes in store.values())
-    return {
-        "handles": handles,
-        "handle_count": len(handles),
-        "attribute_count": attribute_count,
-    }
+    return handles_payload(store)
+
+
+@app.post("/_admin/api/store/reset", dependencies=[Depends(require_admin)])
+def reset_store() -> Dict[str, Any]:
+    with store_lock:
+        backup_path = backup_store_unlocked()
+        store = default_store()
+        write_store_unlocked(store)
+
+    return handles_payload(
+        store,
+        reset=True,
+        backup_path=backup_path,
+        message="API store was reset to the default /value handle.",
+    )
 
 
 @app.post("/_admin/api/handles", status_code=201, dependencies=[Depends(require_admin)])

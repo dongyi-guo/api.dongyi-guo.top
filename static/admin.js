@@ -9,6 +9,7 @@
 		handles: [],
 		token: sessionStorage.getItem(tokenStorageKey) || "",
 		tokenConfigured: false,
+		storeError: "",
 		unlocked: false,
 	};
 
@@ -22,6 +23,9 @@
 		unlockToken: $("#unlockToken"),
 		unlockStatus: $("#unlockStatus"),
 		lockButton: $("#lockButton"),
+		storeAlert: $("#storeAlert"),
+		storeErrorText: $("#storeErrorText"),
+		resetStore: $("#resetStore"),
 		handleCount: $("#handleCount"),
 		attributeCount: $("#attributeCount"),
 		refreshHandles: $("#refreshHandles"),
@@ -132,10 +136,13 @@
 
 		if (!response.ok) {
 			const detail = payload && payload.detail ? payload.detail : `${response.status} ${response.statusText}`;
+			const error = new Error(detail);
+			error.status = response.status;
+			error.payload = payload;
 			if (response.status === 401) {
 				lockApp("Token was rejected. Enter the admin token to unlock again.");
 			}
-			throw new Error(detail);
+			throw error;
 		}
 		return payload;
 	}
@@ -168,38 +175,50 @@
 		}
 
 		try {
-			const data = await requestJson("/_admin/api/handles");
+			await requestJson("/_admin/api/session");
 			sessionStorage.setItem(tokenStorageKey, state.token);
-			setUnlocked(data);
+			setUnlocked();
+			await loadHandles();
 			if (!quiet) {
 				showToast("Unlocked.");
 			}
 		} catch (error) {
-			state.token = "";
-			sessionStorage.removeItem(tokenStorageKey);
-			setLocked("Token was not accepted. Check it and try again.", "warning");
+			if (error.status === 401 || error.status === 503) {
+				state.token = "";
+				sessionStorage.removeItem(tokenStorageKey);
+				setLocked("Token was not accepted. Check it and try again.", "warning");
+				if (!quiet) {
+					showToast(error.message, true);
+				}
+				return;
+			}
+
+			setUnlocked();
+			showStoreError(error.message);
 			if (!quiet) {
 				showToast(error.message, true);
 			}
 		}
 	}
 
-	function setUnlocked(data) {
+	function setUnlocked() {
 		state.unlocked = true;
 		document.body.classList.remove("is-locked");
 		document.body.classList.add("is-unlocked");
 		elements.unlockScreen.hidden = true;
 		elements.appShell.hidden = false;
-		applyHandlesData(data);
+		renderHandles();
 	}
 
 	function setLocked(message, tone) {
 		state.unlocked = false;
 		state.handles = [];
+		state.storeError = "";
 		document.body.classList.add("is-locked");
 		document.body.classList.remove("is-unlocked");
 		elements.appShell.hidden = true;
 		elements.unlockScreen.hidden = false;
+		elements.storeAlert.hidden = true;
 		elements.handleCount.textContent = "0";
 		elements.attributeCount.textContent = "0";
 		renderHandles();
@@ -216,10 +235,29 @@
 	}
 
 	function applyHandlesData(data) {
+		state.storeError = "";
 		state.handles = data.handles || [];
 		elements.handleCount.textContent = data.handle_count || 0;
 		elements.attributeCount.textContent = data.attribute_count || 0;
+		elements.storeAlert.hidden = true;
 		renderHandles();
+	}
+
+	function showStoreError(message) {
+		state.storeError = message;
+		state.handles = [];
+		elements.handleCount.textContent = "!";
+		elements.attributeCount.textContent = "!";
+		elements.storeErrorText.textContent = message;
+		elements.storeAlert.hidden = false;
+		renderHandles();
+	}
+
+	function handleStoreRequestError(error) {
+		if (error.status && error.status >= 500) {
+			showStoreError(error.message);
+		}
+		showToast(error.message, true);
 	}
 
 	async function loadHandles() {
@@ -243,7 +281,9 @@
 		}
 
 		if (state.handles.length === 0) {
-			elements.handlesList.innerHTML = '<div class="empty-state">No handles yet. Create one below to start serving JSON.</div>';
+			elements.handlesList.innerHTML = state.storeError
+				? '<div class="empty-state">Repair the store file above before handles can be listed or edited.</div>'
+				: '<div class="empty-state">No handles yet. Create one below to start serving JSON.</div>';
 			return;
 		}
 
@@ -381,6 +421,11 @@
 
 	async function createHandle(event) {
 		event.preventDefault();
+		if (state.storeError) {
+			showToast("Repair the store file before creating handles.", true);
+			return;
+		}
+
 		let handle;
 		let attributes;
 		try {
@@ -401,7 +446,7 @@
 			window.location.hash = "handles";
 			showToast(`Created /${handle}.`);
 		} catch (error) {
-			showToast(error.message, true);
+			handleStoreRequestError(error);
 		}
 	}
 
@@ -428,7 +473,7 @@
 			await loadHandles();
 			showToast(`Renamed /${currentHandle} to /${nextHandle}.`);
 		} catch (error) {
-			showToast(error.message, true);
+			handleStoreRequestError(error);
 		}
 	}
 
@@ -442,7 +487,7 @@
 			await loadHandles();
 			showToast(`Deleted /${handle}.`);
 		} catch (error) {
-			showToast(error.message, true);
+			handleStoreRequestError(error);
 		}
 	}
 
@@ -471,7 +516,7 @@
 			await loadHandles();
 			showToast(`Saved ${nextAttribute} on /${item.handle}.`);
 		} catch (error) {
-			showToast(error.message, true);
+			handleStoreRequestError(error);
 		}
 	}
 
@@ -500,7 +545,7 @@
 			await loadHandles();
 			showToast(`Added ${attribute} to /${item.handle}.`);
 		} catch (error) {
-			showToast(error.message, true);
+			handleStoreRequestError(error);
 		}
 	}
 
@@ -516,7 +561,27 @@
 			await loadHandles();
 			showToast(`Deleted ${attribute} from /${handle}.`);
 		} catch (error) {
-			showToast(error.message, true);
+			handleStoreRequestError(error);
+		}
+	}
+
+	async function resetBrokenStore() {
+		if (!state.storeError) {
+			showToast("The store is already loading normally.");
+			return;
+		}
+
+		if (!window.confirm("Reset api_store.json to the default /value handle? The current broken file will be copied to a timestamped backup first.")) {
+			return;
+		}
+
+		try {
+			const data = await requestJson("/_admin/api/store/reset", { method: "POST" });
+			applyHandlesData(data);
+			const backupNote = data.backup_path ? ` Backup: ${data.backup_path}` : "";
+			showToast(`${data.message || "Store reset."}${backupNote}`);
+		} catch (error) {
+			handleStoreRequestError(error);
 		}
 	}
 
@@ -535,8 +600,9 @@
 		});
 		elements.lockButton.addEventListener("click", () => lockApp());
 		elements.refreshHandles.addEventListener("click", () => {
-			loadHandles().then(() => showToast("Refreshed.")).catch((error) => showToast(error.message, true));
+			loadHandles().then(() => showToast("Refreshed.")).catch(handleStoreRequestError);
 		});
+		elements.resetStore.addEventListener("click", resetBrokenStore);
 		elements.addCreatePair.addEventListener("click", () => addCreatePairRow());
 		elements.createHandleForm.addEventListener("submit", createHandle);
 	}

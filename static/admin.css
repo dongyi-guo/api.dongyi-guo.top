@@ -440,6 +440,26 @@ h3 {
 	padding: 1.5rem;
 }
 
+.store-alert {
+	align-items: center;
+	border-color: rgba(191, 97, 106, 0.52);
+	display: grid;
+	gap: 1rem;
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.store-alert h2 {
+	margin-bottom: 0.5rem;
+}
+
+.store-error-text {
+	color: #ffd9dd;
+	font-family: "Cascadia Mono", "Courier New", monospace;
+	font-size: 0.92rem;
+	margin-bottom: 0;
+	overflow-wrap: anywhere;
+}
+
 .section-heading {
 	border-bottom: 1px solid var(--line);
 	margin: -0.2rem 0 1.35rem;
@@ -720,9 +740,14 @@ h3 {
 	.handle-card-header,
 	.handle-actions,
 	.row-actions,
+	.store-alert,
 	.pair-heading {
 		align-items: stretch;
 		flex-direction: column;
+	}
+
+	.store-alert {
+		grid-template-columns: 1fr;
 	}
 }
 
