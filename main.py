@@ -124,6 +124,12 @@ def validate_attributes(attributes: Dict[str, Any]) -> Dict[str, Any]:
     return validated
 
 
+def require_attributes(attributes: Dict[str, Any]) -> Dict[str, Any]:
+    if not attributes:
+        raise HTTPException(status_code=400, detail="A handle needs at least one key/value pair.")
+    return attributes
+
+
 def read_store_unlocked() -> Dict[str, Dict[str, Any]]:
     if not STORE_PATH.exists():
         write_store_unlocked(default_store())
@@ -267,7 +273,7 @@ def reset_store() -> Dict[str, Any]:
 @app.post("/_admin/api/handles", status_code=201, dependencies=[Depends(require_admin)])
 def create_handle(payload: HandleCreate) -> Dict[str, Any]:
     handle = validate_handle(payload.handle)
-    attributes = validate_attributes(payload.attributes)
+    attributes = require_attributes(validate_attributes(payload.attributes))
 
     with store_lock:
         store = read_store_unlocked()
@@ -288,6 +294,16 @@ def replace_handle(handle: str, payload: HandleReplace) -> Dict[str, Any]:
         store = read_store_unlocked()
         if handle not in store:
             raise HTTPException(status_code=404, detail=f"Handle '/{handle}' does not exist.")
+        if not attributes:
+            del store[handle]
+            write_store_unlocked(store)
+            return {
+                "handle": handle,
+                "path": f"/{handle}",
+                "attribute_count": 0,
+                "attributes": {},
+                "deleted": True,
+            }
         store[handle] = attributes
         write_store_unlocked(store)
 
@@ -388,6 +404,8 @@ def delete_attribute(handle: str, attribute: str) -> Response:
         if attribute not in store[handle]:
             raise HTTPException(status_code=404, detail=f"Attribute '{attribute}' does not exist.")
         del store[handle][attribute]
+        if not store[handle]:
+            del store[handle]
         write_store_unlocked(store)
 
     return Response(status_code=204)

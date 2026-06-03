@@ -10,6 +10,7 @@
 		token: sessionStorage.getItem(tokenStorageKey) || "",
 		tokenConfigured: false,
 		storeError: "",
+		isSaving: false,
 		unlocked: false,
 	};
 
@@ -34,6 +35,10 @@
 		newHandle: $("#newHandle"),
 		createPairs: $("#createPairs"),
 		addCreatePair: $("#addCreatePair"),
+		bulkEditBar: $("#bulkEditBar"),
+		bulkEditSummary: $("#bulkEditSummary"),
+		cancelAllChanges: $("#cancelAllChanges"),
+		saveAllChanges: $("#saveAllChanges"),
 		toast: $("#toast"),
 	};
 
@@ -87,6 +92,10 @@
 			return value;
 		}
 		return JSON.stringify(value);
+	}
+
+	function valueSignature(value) {
+		return JSON.stringify({ type: valueType(value), value });
 	}
 
 	function valueType(value) {
@@ -260,6 +269,102 @@
 		showToast(error.message, true);
 	}
 
+	function findHandle(handle) {
+		return state.handles.find((item) => item.handle === handle);
+	}
+
+	function dirtyRows() {
+		return $$("form.kv-row.is-dirty", elements.handlesList);
+	}
+
+	function hasDirtyRows() {
+		return dirtyRows().length > 0;
+	}
+
+	function inputValueSignature(raw) {
+		return valueSignature(parseFlatValue(raw));
+	}
+
+	function updateBulkBar() {
+		const count = dirtyRows().length;
+		const hasChanges = count > 0;
+		elements.bulkEditBar.hidden = !hasChanges;
+		elements.bulkEditSummary.textContent = `${count} unsaved ${count === 1 ? "change" : "changes"}`;
+		elements.cancelAllChanges.disabled = !hasChanges || state.isSaving;
+		elements.saveAllChanges.disabled = !hasChanges || state.isSaving;
+	}
+
+	function updateRowDirty(row) {
+		const attributeInput = $('input[name="attribute"]', row);
+		const valueInput = $('textarea[name="value"]', row);
+		const saveButton = $("[data-save-attribute]", row);
+		let isDirty = false;
+		let isInvalid = false;
+
+		try {
+			const nextAttribute = validateName(normalizeName(attributeInput.value), "Key");
+			const nextValueSignature = inputValueSignature(valueInput.value);
+			isDirty = nextAttribute !== row.dataset.originalAttribute || nextValueSignature !== row.dataset.originalValueSignature;
+		} catch (_error) {
+			isDirty = true;
+			isInvalid = true;
+		}
+
+		row.classList.toggle("is-dirty", isDirty);
+		row.classList.toggle("is-invalid", isInvalid);
+		saveButton.disabled = !isDirty || state.isSaving;
+		updateBulkBar();
+		return isDirty;
+	}
+
+	function updateRowOriginal(row, attribute, value) {
+		const inputValue = valueToInput(value);
+		row.dataset.attribute = attribute;
+		row.dataset.originalAttribute = attribute;
+		row.dataset.originalValueInput = inputValue;
+		row.dataset.originalValueSignature = valueSignature(value);
+		$('input[name="attribute"]', row).value = attribute;
+		$('textarea[name="value"]', row).value = inputValue;
+
+		const typeBadge = $(".value-type", row);
+		typeBadge.textContent = valueType(value);
+		typeBadge.title = displayValue(value);
+		updateRowDirty(row);
+	}
+
+	function resetRowToOriginal(row) {
+		$('input[name="attribute"]', row).value = row.dataset.originalAttribute;
+		$('textarea[name="value"]', row).value = row.dataset.originalValueInput;
+		updateRowDirty(row);
+	}
+
+	function updateRenameDirty(form, handle) {
+		const input = $('input[name="handle"]', form);
+		const button = $("[data-save-handle]", form);
+		button.disabled = normalizeName(input.value) === handle || state.isSaving;
+	}
+
+	function collectCardAttributes(card) {
+		const attributes = {};
+		$$("form.kv-row", card).forEach((row) => {
+			const attribute = validateName(normalizeName($('input[name="attribute"]', row).value), "Key");
+			if (Object.prototype.hasOwnProperty.call(attributes, attribute)) {
+				throw new Error(`Duplicate key '${attribute}' in /${card.dataset.handle}.`);
+			}
+			attributes[attribute] = parseFlatValue($('textarea[name="value"]', row).value);
+		});
+		return attributes;
+	}
+
+	function updateStateHandle(handle, attributes) {
+		const item = findHandle(handle);
+		if (!item) {
+			return;
+		}
+		item.attributes = attributes;
+		item.attribute_count = Object.keys(attributes).length;
+	}
+
 	async function loadHandles() {
 		if (!state.token) {
 			lockApp("Enter the admin token to unlock the manager.");
@@ -277,6 +382,7 @@
 		elements.handlesList.innerHTML = "";
 
 		if (!state.unlocked) {
+			updateBulkBar();
 			return;
 		}
 
@@ -284,17 +390,20 @@
 			elements.handlesList.innerHTML = state.storeError
 				? '<div class="empty-state">Repair the store file above before handles can be listed or edited.</div>'
 				: '<div class="empty-state">No handles yet. Create one below to start serving JSON.</div>';
+			updateBulkBar();
 			return;
 		}
 
 		state.handles.forEach((item) => {
 			elements.handlesList.appendChild(renderHandleCard(item));
 		});
+		updateBulkBar();
 	}
 
 	function renderHandleCard(item) {
 		const card = document.createElement("article");
 		card.className = "handle-card";
+		card.dataset.handle = item.handle;
 
 		card.innerHTML = `
 			<div class="handle-card-header">
@@ -315,7 +424,7 @@
 						<span>/</span>
 						<input name="handle" type="text" pattern="[A-Za-z0-9_-]{1,64}" required />
 					</div>
-					<button type="submit" class="button small">Save path</button>
+					<button type="submit" class="button small" data-save-handle>Save path</button>
 				</div>
 			</form>
 
@@ -332,6 +441,10 @@
 		`;
 
 		$('input[name="handle"]', card).value = item.handle;
+		const renameForm = $(".handle-rename-form", card);
+		$('input[name="handle"]', renameForm).addEventListener("input", () => updateRenameDirty(renameForm, item.handle));
+		updateRenameDirty(renameForm, item.handle);
+
 		const keyValueList = $(".kv-list", card);
 		const entries = Object.entries(item.attributes);
 
@@ -347,7 +460,7 @@
 			});
 		}
 
-		$(".handle-rename-form", card).addEventListener("submit", (event) => renameHandle(event, item.handle));
+		renameForm.addEventListener("submit", (event) => renameHandle(event, item.handle));
 		$("[data-delete-handle]", card).addEventListener("click", () => deleteHandle(item.handle));
 		$(".add-pair-form", card).addEventListener("submit", (event) => addAttribute(event, item));
 
@@ -357,22 +470,29 @@
 	function renderAttributeRow(item, attribute, value) {
 		const row = document.createElement("form");
 		row.className = "kv-row";
+		row.dataset.handle = item.handle;
 		row.dataset.attribute = attribute;
+		row.dataset.originalAttribute = attribute;
+		row.dataset.originalValueInput = valueToInput(value);
+		row.dataset.originalValueSignature = valueSignature(value);
 
 		row.innerHTML = `
 			<input name="attribute" type="text" pattern="[A-Za-z0-9_-]{1,64}" required aria-label="Key" />
 			<textarea name="value" rows="2" spellcheck="false" aria-label="Value"></textarea>
 			<span class="value-type" title="${escapeHtml(displayValue(value))}">${escapeHtml(valueType(value))}</span>
 			<div class="row-actions">
-				<button type="submit" class="button small">Save</button>
+				<button type="submit" class="button small" data-save-attribute disabled>Save</button>
 				<button type="button" class="button small danger" data-delete-attribute>Delete</button>
 			</div>
 		`;
 
 		$('input[name="attribute"]', row).value = attribute;
 		$('textarea[name="value"]', row).value = valueToInput(value);
+		$('input[name="attribute"]', row).addEventListener("input", () => updateRowDirty(row));
+		$('textarea[name="value"]', row).addEventListener("input", () => updateRowDirty(row));
 		row.addEventListener("submit", (event) => saveAttribute(event, item));
-		$("[data-delete-attribute]", row).addEventListener("click", () => deleteAttribute(item.handle, attribute));
+		$("[data-delete-attribute]", row).addEventListener("click", () => deleteAttribute(item.handle, row.dataset.attribute));
+		updateRowDirty(row);
 		return row;
 	}
 
@@ -407,6 +527,9 @@
 	function collectCreateAttributes() {
 		const attributes = {};
 		const rows = $$(".pair-row", elements.createPairs);
+		if (rows.length === 0) {
+			throw new Error("Add at least one key/value pair before creating a handle.");
+		}
 
 		rows.forEach((row) => {
 			const attribute = validateName(normalizeName($('input[name="attribute"]', row).value), "Key");
@@ -423,6 +546,9 @@
 		event.preventDefault();
 		if (state.storeError) {
 			showToast("Repair the store file before creating handles.", true);
+			return;
+		}
+		if (hasDirtyRows() && !window.confirm("Creating a handle will refresh the list and discard unsaved key/value edits. Continue?")) {
 			return;
 		}
 
@@ -452,6 +578,10 @@
 
 	async function renameHandle(event, currentHandle) {
 		event.preventDefault();
+		if (hasDirtyRows() && !window.confirm("Renaming a handle will refresh the list and discard unsaved key/value edits. Continue?")) {
+			return;
+		}
+
 		let nextHandle;
 		try {
 			nextHandle = validateName(normalizeName($('input[name="handle"]', event.currentTarget).value), "Handle");
@@ -478,7 +608,8 @@
 	}
 
 	async function deleteHandle(handle) {
-		if (!window.confirm(`Delete /${handle} and all of its key/value pairs?`)) {
+		const dirtyWarning = hasDirtyRows() ? "\n\nAny unsaved edits currently on the page will be discarded when the list refreshes." : "";
+		if (!window.confirm(`Delete /${handle} and all of its key/value pairs?${dirtyWarning}`)) {
 			return;
 		}
 
@@ -495,13 +626,16 @@
 		event.preventDefault();
 		const row = event.currentTarget;
 		const oldAttribute = row.dataset.attribute;
+		if (!updateRowDirty(row)) {
+			showToast("No changes to save.");
+			return;
+		}
+
 		let nextAttribute;
 		let nextValue;
 		try {
+			collectCardAttributes(row.closest(".handle-card"));
 			nextAttribute = validateName(normalizeName($('input[name="attribute"]', row).value), "Key");
-			if (nextAttribute !== oldAttribute && Object.prototype.hasOwnProperty.call(item.attributes, nextAttribute)) {
-				throw new Error(`Key '${nextAttribute}' already exists on /${item.handle}.`);
-			}
 			nextValue = parseFlatValue($('textarea[name="value"]', row).value);
 		} catch (error) {
 			showToast(error.message, true);
@@ -509,11 +643,12 @@
 		}
 
 		try {
-			await requestJson(`/_admin/api/handles/${encodeURIComponent(item.handle)}/attributes/${encodeURIComponent(oldAttribute)}`, {
+			const data = await requestJson(`/_admin/api/handles/${encodeURIComponent(item.handle)}/attributes/${encodeURIComponent(oldAttribute)}`, {
 				method: "PATCH",
 				body: JSON.stringify({ attribute: nextAttribute, value: nextValue }),
 			});
-			await loadHandles();
+			updateStateHandle(item.handle, data.attributes);
+			updateRowOriginal(row, nextAttribute, nextValue);
 			showToast(`Saved ${nextAttribute} on /${item.handle}.`);
 		} catch (error) {
 			handleStoreRequestError(error);
@@ -522,6 +657,10 @@
 
 	async function addAttribute(event, item) {
 		event.preventDefault();
+		if (hasDirtyRows() && !window.confirm("Adding a new key/value pair will refresh the list and discard unsaved edits. Continue?")) {
+			return;
+		}
+
 		const form = event.currentTarget;
 		let attribute;
 		let value;
@@ -550,7 +689,13 @@
 	}
 
 	async function deleteAttribute(handle, attribute) {
-		if (!window.confirm(`Delete key '${attribute}' from /${handle}?`)) {
+		const item = findHandle(handle);
+		const willDeleteHandle = item && item.attribute_count === 1;
+		const dirtyWarning = hasDirtyRows() ? "\n\nAny unsaved edits currently on the page will be discarded when the list refreshes." : "";
+		const message = willDeleteHandle
+			? `Delete key '${attribute}' from /${handle}? This is the last key/value pair, so /${handle} will also be deleted and released.${dirtyWarning}`
+			: `Delete key '${attribute}' from /${handle}?${dirtyWarning}`;
+		if (!window.confirm(message)) {
 			return;
 		}
 
@@ -559,9 +704,58 @@
 				method: "DELETE",
 			});
 			await loadHandles();
-			showToast(`Deleted ${attribute} from /${handle}.`);
+			showToast(willDeleteHandle
+				? `Deleted ${attribute}; /${handle} was removed because no key/value pairs remain.`
+				: `Deleted ${attribute} from /${handle}.`);
 		} catch (error) {
 			handleStoreRequestError(error);
+		}
+	}
+
+	function cancelAllChanges() {
+		const rows = dirtyRows();
+		rows.forEach(resetRowToOriginal);
+		updateBulkBar();
+		showToast(`Canceled ${rows.length} unsaved ${rows.length === 1 ? "change" : "changes"}.`);
+	}
+
+	async function saveAllChanges() {
+		const rows = dirtyRows();
+		if (rows.length === 0) {
+			return;
+		}
+
+		const cards = Array.from(new Set(rows.map((row) => row.closest(".handle-card"))));
+		let payloads;
+		try {
+			payloads = cards.map((card) => ({
+				handle: card.dataset.handle,
+				attributes: collectCardAttributes(card),
+			}));
+		} catch (error) {
+			showToast(error.message, true);
+			return;
+		}
+
+		state.isSaving = true;
+		updateBulkBar();
+		dirtyRows().forEach(updateRowDirty);
+
+		try {
+			for (const payload of payloads) {
+				await requestJson(`/_admin/api/handles/${encodeURIComponent(payload.handle)}`, {
+					method: "PUT",
+					body: JSON.stringify({ attributes: payload.attributes }),
+				});
+			}
+			await loadHandles();
+			showToast(`Saved ${rows.length} ${rows.length === 1 ? "change" : "changes"}.`);
+		} catch (error) {
+			handleStoreRequestError(error);
+		} finally {
+			state.isSaving = false;
+			updateBulkBar();
+			$$("form.kv-row", elements.handlesList).forEach(updateRowDirty);
 		}
 	}
 
@@ -603,6 +797,8 @@
 			loadHandles().then(() => showToast("Refreshed.")).catch(handleStoreRequestError);
 		});
 		elements.resetStore.addEventListener("click", resetBrokenStore);
+		elements.cancelAllChanges.addEventListener("click", cancelAllChanges);
+		elements.saveAllChanges.addEventListener("click", saveAllChanges);
 		elements.addCreatePair.addEventListener("click", () => addCreatePairRow());
 		elements.createHandleForm.addEventListener("submit", createHandle);
 	}
