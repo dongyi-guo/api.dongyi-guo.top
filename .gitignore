@@ -183,3 +183,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 /.vscode
+
+# macOS
+.DS_Store
+
+# Project
+grounded_cafe_orders.csv
