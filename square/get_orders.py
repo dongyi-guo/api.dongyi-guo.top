@@ -36,6 +36,132 @@ TRACKED_DISCOUNTS = {
 # not a discount on a normally priced item.
 REDEMPTION_ITEMS = {"Student Meal", "Student Drink"}
 
+# Built from actual order data (grounded_cafe_orders.csv), not the catalog listing,
+# since item names on orders drift from catalog names over time (typos, renames, spacing).
+# Names are normalised (stripped) before lookup - see normalise_item_name().
+ITEM_CATEGORY = {
+    # Coffee
+    "~ Cappuccino ~": "Coffee",
+    "Cappuccino": "Coffee",
+    "Latte": "Coffee",
+    "Flat White": "Coffee",
+    "Mocha": "Coffee",
+    "Long Black": "Coffee",
+    "Espresso": "Coffee",
+    "Piccolo": "Coffee",
+    "Babycino": "Coffee",
+    "Iced Latte": "Coffee",
+    "Iced Long Black": "Coffee",
+    "Iced Mocha": "Coffee",
+
+    # Drink (non-coffee)
+    "Milkshake ~ Vanilla": "Drink",
+    "Vanilla Milkshake": "Drink",
+    "Chocolate Milkshake": "Drink",
+    "Caramel Milkshake": "Drink",
+    "Strawberry Milkshake": "Drink",
+    "Banana Milkshake": "Drink",
+    "Smoothie - Banana": "Drink",
+    "Banana Smoothie": "Drink",
+    "Smoothie ~ Mango": "Drink",
+    "Mango Smoothie": "Drink",
+    "Smoothie ~ Mixed Berry": "Drink",
+    "Mixed Berry Smoothie": "Drink",
+    "Tea ~ English Breakfast": "Drink",
+    "English Breakfast": "Drink",
+    "English Breakfast Tea": "Drink",
+    "Earl Grey": "Drink",
+    "Earl Grey Tea": "Drink",
+    "Green": "Drink",
+    "Green Tea": "Drink",
+    "Peppermint": "Drink",
+    "Peppermint Tea": "Drink",
+    "Hot Chocolate": "Drink",
+    "Matcha Latte": "Drink",
+    "Chai Latte": "Drink",
+    "Dirty Chai": "Drink",
+    "Iced Chai Latte": "Drink",
+    "Iced Chocolate": "Drink",
+    "Iced Matcha": "Drink",
+    "Iced Dirty Chai Latte": "Drink",
+    "Packaged Protein Smoothie - Chocolate": "Drink",
+    "Packaged  Protein Smoothie - Salted Caramel": "Drink",
+    "Packaged Protein Smoothie - Salted Caramel": "Drink",
+    "Packaged Protein Smoothie - Banana Honey": "Drink",
+    "Packaged Protein Smoothie - Mango": "Drink",
+    "Packaged Protein Smoothie - Vanilla": "Drink",
+    "Packaged Apple Juice": "Drink",
+    "TUSA After Dark - Drink": "Drink",
+    "Student Drink": "Drink",
+
+    # Food
+    "Banana, Date & Walnut Loaf": "Food",
+    "Friand": "Food",
+    "Daily-Baked Savoury Muffin": "Food",
+    "Moroccan Roast Veggie Rice Rolls": "Food",
+    "Muffin ~ Egg & Cheese": "Food",
+    "Egg & Cheese Muffin": "Food",
+    "Toastie ~ The Reuben": "Food",
+    "Reuben Toastie": "Food",
+    "Ruban Toastie": "Food",  # typo variant of Reuben Toastie, seen in live order data
+    "Toastie ~ Pumpkin": "Food",
+    "Pumpkin Toastie": "Food",
+    "Toastie ~ Chicken": "Food",
+    "Chicken Toastie": "Food",
+    "Soup": "Food",
+    "Yoghurt Cup": "Food",
+    "Toastie ~ Ham & Cheese": "Food",
+    "Ham & Cheese Toastie": "Food",
+    "Ham & Cheese Croissant": "Food",
+    "Cookie ~ White Chocolate": "Food",
+    "White Chocolate Cookie": "Food",
+    "Choc Chip": "Food",
+    "Choc Chip Cookie": "Food",
+    "Choc-Chip Muffin": "Food",
+    "Double Choc Chip Cookie": "Food",
+    "Chocolate Brownie": "Food",
+    "Biscoff": "Food",
+    "Biscoff Cookie": "Food",
+    "Nutella": "Food",
+    "Nutella Cookie": "Food",
+    "Raspberry & White Chocolate": "Food",
+    "Beef Sausage Roll": "Food",
+    "Beef Sausage Roll (HALAL)": "Food",
+    "Beef Sausage Roll (Halal)": "Food",
+    "Cheese & Spinach Bites": "Food",
+    "Cheesy Balls (Chippas)": "Food",
+    "Chippas": "Food",
+    "Cheeseburger Pie": "Food",
+    "Coconut Butter Chicken": "Food",
+    "Curry Bowl": "Food",
+    "Miso Mushroom Bowl": "Food",
+    "Heat & Eat Meal": "Food",
+    "House-Made Loaded Focaccia": "Food",
+    "Meat-Lovers Loaded Focaccia": "Food",
+    "Croissant": "Food",
+    "Plain Croissant": "Food",
+    "Basque Cheesecake": "Food",
+    "Orange & Almond Cake (GF) (VEGAN)": "Food",
+    "Sandwich ~ Egg Salad": "Food",
+    "Egg Salad Sandwich": "Food",
+    "Salad": "Food",
+    "Mixed Berry & Yoghurt Muffin": "Food",
+    "Muffin ~ Mixed Berry & Yoghurt": "Food",
+    "TUSA After Dark - Food": "Food",
+    "Student Meal": "Food",
+
+    # Excluded: placeholder, till-reconciliation, or non-consumable entries
+    "Pay-It Forward": "Exclude",
+    "Tote Bag": "Exclude",
+    "Stickers": "Exclude",
+    "Cash Variance": "Exclude",
+}
+
+
+def normalise_item_name(name):
+    """Strip whitespace so trailing-space variants (e.g. 'Soup ') still match the dict."""
+    return name.strip() if name else name
+
 
 def match_discount(order):
     """Map each order-level discount uid to its catalog discount name, only for tracked discounts."""
@@ -78,9 +204,6 @@ def fetch_all_orders():
             payload["cursor"] = cursor
 
         response = requests.post(URL, headers=HEADERS, json=payload)
-        if response.status_code != 200:
-            print(f"Error fetching orders: {response.status_code} {response.text}")
-            break
         response.raise_for_status()
         data = response.json()
 
@@ -98,7 +221,7 @@ def write_csv(all_orders):
         writer = csv.writer(f)
         writer.writerow([
             "order_id", "transaction_time", "item_name", "quantity",
-            "total_amount", "discount_name", "discount_saved", "redemption_flag"
+            "total_amount", "currency", "discount_name", "discount_saved", "category"
         ])
 
         for order in all_orders:
@@ -109,8 +232,9 @@ def write_csv(all_orders):
 
             for item in order.get("line_items", []):
                 total = item.get("total_money", {}).get("amount", 0)
+                currency = item.get("total_money", {}).get("currency", "AUD")
                 item_name = item.get("name")
-                is_redemption = item_name in REDEMPTION_ITEMS
+                category = ITEM_CATEGORY.get(normalise_item_name(item_name), "Unmapped")
 
                 # An item can technically have multiple discounts applied; capture each as its own row.
                 applied = item.get("applied_discounts", [])
@@ -119,7 +243,7 @@ def write_csv(all_orders):
                 if not tracked_applied:
                     writer.writerow([
                         order_id, created_at_hobart, item_name, item.get("quantity"),
-                        total / 100, "", 0, is_redemption
+                        total / 100, currency, "", 0, category
                     ])
                 else:
                     for a in tracked_applied:
@@ -127,7 +251,7 @@ def write_csv(all_orders):
                         saved = a.get("applied_money", {}).get("amount", 0)
                         writer.writerow([
                             order_id, created_at_hobart, item_name, item.get("quantity"),
-                            total / 100, discount_name, saved / 100, is_redemption
+                            total / 100, currency, discount_name, saved / 100, category
                         ])
 
 
