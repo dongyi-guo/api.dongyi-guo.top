@@ -213,6 +213,16 @@ def fetch_all_orders():
         if not cursor:
             break
 
+    for i, order in enumerate(all_orders, start=1):
+        has_pay_it_forward = any(
+            item.get("name") == "Pay-It Forward"
+            for item in order.get("line_items", [])
+        )
+        if has_pay_it_forward:
+            print(f"\nOrder {i} attributes:")
+            for key, value in order.items():
+                print(f"  {key}: {value}")
+
     return all_orders
 
 
@@ -220,7 +230,7 @@ def write_csv(all_orders):
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "order_id", "transaction_time", "item_name", "quantity",
+            "order_id", "transaction_time", "item_name", "quantity", "variation",
             "total_amount", "currency", "discount_name", "discount_saved", "category"
         ])
 
@@ -234,6 +244,7 @@ def write_csv(all_orders):
                 total = item.get("total_money", {}).get("amount", 0)
                 currency = item.get("total_money", {}).get("currency", "AUD")
                 item_name = item.get("name")
+                variation = item.get("variation_name")
                 category = ITEM_CATEGORY.get(normalise_item_name(item_name), "Unmapped")
 
                 # An item can technically have multiple discounts applied; capture each as its own row.
@@ -242,7 +253,7 @@ def write_csv(all_orders):
 
                 if not tracked_applied:
                     writer.writerow([
-                        order_id, created_at_hobart, item_name, item.get("quantity"),
+                        order_id, created_at_hobart, item_name, item.get("quantity"), variation,
                         total / 100, currency, "", 0, category
                     ])
                 else:
@@ -250,7 +261,7 @@ def write_csv(all_orders):
                         discount_name = uid_to_name[a.get("discount_uid")]
                         saved = a.get("applied_money", {}).get("amount", 0)
                         writer.writerow([
-                            order_id, created_at_hobart, item_name, item.get("quantity"),
+                            order_id, created_at_hobart, item_name, item.get("quantity"), variation,
                             total / 100, currency, discount_name, saved / 100, category
                         ])
 
