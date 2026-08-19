@@ -213,15 +213,15 @@ def fetch_all_orders():
         if not cursor:
             break
 
-    for i, order in enumerate(all_orders, start=1):
-        has_pay_it_forward = any(
-            item.get("name") == "Pay-It Forward"
-            for item in order.get("line_items", [])
-        )
-        if has_pay_it_forward:
-            print(f"\nOrder {i} attributes:")
-            for key, value in order.items():
-                print(f"  {key}: {value}")
+    # for i, order in enumerate(all_orders, start=1):
+    #     has_pay_it_forward = any(
+    #         item.get("name") == "Pay-It Forward"
+    #         for item in order.get("line_items", [])
+    #     )
+    #     if has_pay_it_forward:
+    #         print(f"\nOrder {i} attributes:")
+    #         for key, value in order.items():
+    #             print(f"  {key}: {value}")
 
     return all_orders
 

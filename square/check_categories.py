@@ -1,8 +1,9 @@
 import os
+
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+_ = load_dotenv()
 
 TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
 
