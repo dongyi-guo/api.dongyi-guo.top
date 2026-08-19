@@ -44,7 +44,7 @@ def aggregate(csv_path):
     return {
         "coffees_paid_forward": coffees_paid_forward,
         "meals_paid_forward": meals_paid_forward,
-        "student_discounts_saved": round(student_discounts_saved, 2),
+        "student_discounts_saved": f"{student_discounts_saved:.2f}",
     }
 
 
