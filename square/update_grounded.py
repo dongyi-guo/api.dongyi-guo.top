@@ -1,9 +1,10 @@
 import csv
 import os
+
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+_ = load_dotenv()
 
 API_ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:55500")
@@ -69,6 +70,8 @@ def push_to_api(values: dict):
 def main():
     values = aggregate(CSV_PATH)
     print(f"Aggregated: {values}")
+
+    # If you are testing on your local machine, comment out the line below.
     push_to_api(values)
 
 

@@ -1,117 +1,163 @@
 # Grounded Cafe Square Data Pipeline
 
-Scripts for retrieving sales data from Grounded Cafe's Square POS account via the Square Orders API, and producing a CSV suitable for calculating pay-it-forward and student discount statistics.
+This folder contains the scripts used to pull Grounded Cafe's Square order data, normalise it into a clean CSV, and publish the aggregated impact stats to the API service.
+
+The project now includes a small set of related scripts for discovery, data export, validation, and automation. The main flow is:
+
+1. Pull the relevant orders from Square
+2. Convert and classify the line items
+3. Write a CSV for downstream analysis
+4. Aggregate the key totals
+5. Push those totals to the API handle used by the Grounded site
+
+## Scripts in this folder
+
+- `get_orders.py` — main data pull script. Queries Square for completed orders, paginates through all results, matches tracked discounts, categorises items, and writes `grounded_cafe_orders.csv`.
+- `update_grounded.py` — reads the generated CSV and pushes the aggregated values to the `grounded` handle on the API service.
+- `daily_update.sh` — wrapper script used by cron. Runs the order pull and then the Grounded update in sequence, aborting if the Square data fetch fails.
+- `get_locations.py` — retrieves the Square location list so the correct `SQUARE_LOCATION_ID` can be identified.
+- `list_discounts.py` — lists configured discounts from the Square catalog so you can confirm the tracked discount IDs used in the pipeline.
+- `list_categories.py` — lists any catalog categories currently configured in Square.
+- `check_categories.py` — checks whether items in the Square catalog are assigned to categories; useful for diagnosing why the pipeline uses a manual item-to-category map.
+- `calc_portion_discounts.py` — small diagnostic script for calculating how many rows are student-related and what proportion of the CSV they represent.
 
 ## Prerequisites
 
-This README lives inside the `square/` subfolder of the `api.dongyi-guo.top` project, alongside all the scripts it describes. Run all commands from within this folder.
+Run commands from within this `square/` folder.
 
-- Python 3.9 or later (uses `zoneinfo`, which requires 3.9+)
-- A Square **production** access token and a **sandbox** access token, generated from the Square Developer Console
-- Install dependencies from `requirements.txt`:
+- Python 3.9 or later
+- A Square production access token
+- A Square sandbox token (for testing/diagnostics)
+- The correct `SQUARE_LOCATION_ID` for Grounded Cafe
+- The API admin token and base URL required by `update_grounded.py`
 
-``` bash
+Install Python dependencies from the project root:
+
+```bash
 pip install -r requirements.txt
 ```
 
-## 1. Set up your `.env` file
+## Environment setup
 
-Create a file named `.env` in the same folder as these scripts. Do not commit this file to any Git repository; add it to `.gitignore` if this folder is version controlled.
+Create a `.env` file in this folder with values like:
 
-```
+```env
 SQUARE_ACCESS_TOKEN=your_production_token_here
 SQUARE_SANDBOX_TOKEN=your_sandbox_token_here
 SQUARE_LOCATION_ID=your_location_id_here
+API_ADMIN_TOKEN=your_api_admin_token_here
+API_BASE_URL=http://127.0.0.1:55500
 ```
 
-`SQUARE_LOCATION_ID` is not known yet at this point. It's retrieved in Step 2 below, then added to `.env` afterwards.
+`SQUARE_LOCATION_ID` is usually discovered first using `get_locations.py`.
 
-## 2. Retrieve the Location ID
+## Typical setup flow
 
-Run:
+### 1. Find the Square location ID
 
-``` bash
-python3 square/get_locations.py
+```bash
+python3 get_locations.py
 ```
 
-This calls Square's Locations API and prints every location on the account, along with its `id` and `status`. Find the entry corresponding to Grounded Cafe and copy its `id` value into `.env` as `SQUARE_LOCATION_ID`.
+This prints the list of locations on the account. Copy the Grounded Cafe location ID to `SQUARE_LOCATION_ID` in `.env`.
 
-**Only needs to be run once**, unless the business adds a new physical location or the existing location is reconfigured in Square.
+### 2. Check the configured discounts
 
-## 3. Retrieve configured discounts (optional, reference only)
-
-``` bash
-python3 square/list_discounts.py
+```bash
+python3 list_discounts.py
 ```
 
-Lists every discount defined in the Square Catalog, with its `name`, `id`, and value (percentage or fixed amount). Used to confirm the exact discount names and catalog IDs referenced inside `get_orders.py` (currently `Student Discount (20%)` and `Paid Forward Redemption`).
+Use this to confirm the exact discount IDs and names used by the pipeline, especially the tracked values in `get_orders.py`.
 
-**Only needs to be re-run if a new discount type is added** or an existing one is renamed in Square, in which case the `STUDENT_DISCOUNT_ID` / `PAID_FORWARD_ID` constants inside `get_orders.py` will need updating to match.
+### 3. Check catalog categories
 
-## 4. Check catalog category coverage (optional, diagnostic only)
-
-``` bash
-python3 square/check_categories.py
+```bash
+python3 list_categories.py
+python3 check_categories.py
 ```
 
-Reports how many catalog items have a Square category assigned. As of the last check, Grounded Cafe's Square account has categories defined (e.g. "Hot Drinks", "Toasties / Sandwiches / Muffins") but **none of the 67 items are actually assigned to a category**. Because of this, `get_orders.py` uses a manually maintained lookup dictionary (`ITEM_CATEGORY`) instead of pulling categories automatically.
+These are diagnostics. If Square item categories are not populated, the pipeline relies on the manual `ITEM_CATEGORY` lookup inside `get_orders.py`.
 
-**Re-run this periodically** to check whether categories have since been assigned in Square. If item counts eventually show full coverage, the manual dictionary in `get_orders.py` can be replaced with an automatic category join instead, which would remove the ongoing maintenance burden described in Step 5.
+### 4. Run the main data pull
 
-## 5. Run the main data pull
-
-``` bash
-python3 square/get_orders.py
+```bash
+python3 get_orders.py
 ```
 
-This is the core script. It:
+This script:
 
-1. Queries the Square Orders API (`/v2/orders/search`) for all `COMPLETED` orders from `START_AT` onward, filtered and sorted by `created_at`.
-2. Pages through results automatically using Square's `cursor` field, so all matching orders are retrieved, not just the first page.
-3. Converts every timestamp from UTC to `Australia/Hobart` local time.
-4. Matches each line item's discounts against the tracked discount IDs from Step 3.
-5. Categorises each line item as `Coffee`, `Drink`, `Food`, `Exclude`, or `Unmapped`, using the `ITEM_CATEGORY` dictionary.
-6. Writes everything to `grounded_cafe_orders.csv` in the same folder, overwriting any previous version of that file completely (the file is not appended to; every run produces a fresh, complete file).
+- calls the Square Orders Search API
+- filters for `COMPLETED` orders from `START_AT` onward
+- paginates through all matching results using the `cursor` field
+- converts timestamps from UTC to `Australia/Hobart` time
+- matches tracked discounts such as `Student Discount` and `Paid Forward Redemption`
+- normalises and classifies item names like `Coffee`, `Drink`, `Food`, `Exclude`, or `Unmapped`
+- writes the results to `grounded_cafe_orders.csv`
 
-### Output columns
+The CSV is overwritten on each run, rather than appended to.
 
-| Column             | Description                                                                      |
-| ------------------ | -------------------------------------------------------------------------------- |
-| `order_id`         | Square's unique order identifier                                                 |
-| `transaction_time` | When the order was created, converted to Hobart local time                       |
-| `item_name`        | Item name as it appears on the order (may differ slightly from the catalog name) |
-| `quantity`         | Quantity of that item in the order                                               |
-| `total_amount`     | Price charged for that item, in dollars                                          |
-| `currency`         | Currency code (expected: `AUD`)                                                  |
-| `discount_name`    | Name of the tracked discount applied to this item, if any                        |
-| `discount_saved`   | Dollar amount saved via that discount                                            |
-| `category`         | `Coffee`, `Drink`, `Food`, `Exclude`, or `Unmapped`                              |
+### 5. Aggregate and push the numbers
 
-### Before trusting a run's output
+```bash
+python3 update_grounded.py
+```
 
-Open the CSV and check the `category` column for any `Unmapped` rows. These indicate an item name not currently listed in `ITEM_CATEGORY`, either because it's genuinely new on the menu, or because the name on the order doesn't match what's in the dictionary (this has happened before, e.g. `Reuben Toastie` vs `Ruban Toastie` vs `Toastie ~ The Reuben`, all the same item). Add any missing names to the dictionary in `get_orders.py` and re-run.
+This reads the CSV and pushes the aggregated values to the API service with the admin token. In production, the intended entry point is normally `daily_update.sh`.
 
-## 6. Configuration you may need to change
+### 6. The scheduled cron job
 
-All of the following are defined near the top of `get_orders.py`:
+```bash
+./daily_update.sh
+```
 
-- **`START_AT`**: the earliest date orders are pulled from, in Hobart local time with explicit UTC offset (e.g. `"2026-06-09T00:00:00+10:00"`). No `end_at` is set, so every run always pulls up to the current moment.
-- **`STUDENT_DISCOUNT_ID`, `PAID_FORWARD_ID`**: catalog discount IDs from Step 3. Update these if the discounts are ever recreated in Square (which would generate new IDs).
-- **`REDEMPTION_ITEMS`**: item names treated as free redemptions (currently `Student Meal`, `Student Drink`, from the hard launch event).
-- **`ITEM_CATEGORY`**: the manually maintained name-to-category lookup described in Step 5. This is the main thing that will need occasional updates as the menu changes.
+This is the script used to automate the daily run. It does the following:
 
-## Notes and known limitations
+```bash
+python3 get_orders.py
+python3 update_grounded.py
+```
 
-- **Daylight saving**: `START_AT` uses a fixed `+10:00` offset (AEST). If querying date ranges that cross into daylight saving (roughly October onward), the offset needs to be `+11:00` for those dates, or Hobart's local midnight will be calculated incorrectly.
-- **Menu drift**: the cafe's menu is not fixed and item names are not always consistent between the Square Catalog and what appears on individual orders. `ITEM_CATEGORY` requires manual maintenance; there is currently no automated way to categorise new items reliably, since Square's own category feature is not populated on this account (see Step 4).
-- **Refunds**: this pipeline reads the Orders API only. If an order is refunded after being pulled, that won't be reflected unless the script is re-run and the order's state has changed accordingly.
-- **Square API rate limits are undocumented** by Square directly; there is no fixed published number. In practice, this pipeline's volume (a handful of paginated requests per run) is far below anything likely to trigger throttling. Recommended run frequency is daily rather than more frequent, since the data itself doesn't need to be near-real-time for reporting purposes.
+It exits early if the order pull fails so stale numbers are not published.
+
+## Output file
+
+`grounded_cafe_orders.csv` is the main output of the pipeline. It contains one row per discounted or non-discounted line item, with fields such as:
+
+- `order_id`
+- `transaction_time`
+- `item_name`
+- `quantity`
+- `total_amount`
+- `currency`
+- `discount_name`
+- `discount_saved`
+- `category`
+
+## Configuration notes
+
+The key settings live near the top of `get_orders.py`:
+
+- `START_AT` — the earliest order timestamp to include, using Hobart local time with an explicit offset
+- `STUDENT_DISCOUNT_ID` and `PAID_FORWARD_ID` — tracked discount IDs for the key discount types
+- `REDEMPTION_ITEMS` — item names treated as pay-it-forward redemptions
+- `ITEM_CATEGORY` — manual category map used to classify menu items consistently
+
+## Known limitations
+
+- The item names on orders may drift from the catalog names, so manual maintenance of `ITEM_CATEGORY` is sometimes required.
+- `get_orders.py` only reads completed orders; refunded or cancelled orders are not treated specially unless the API state changes and the script is re-run.
+- The pipeline relies on a fixed `+10:00` offset for `START_AT` unless the date range crosses daylight saving changes.
 
 ## File summary
 
-| File                  | Purpose                         | Run frequency                     |
-| --------------------- | ------------------------------- | --------------------------------- |
-| `get_locations.py`    | Get Square location ID          | Once, or if location changes      |
-| `list_discounts.py`   | List all configured discounts   | Occasionally, if discounts change |
-| `check_categories.py` | Check catalog category coverage | Occasionally, as a diagnostic     |
-| `get_orders.py`       | Main data pull and CSV output   | Daily (recommended)               |
+| File | Purpose | Typical usage |
+| --- | --- | --- |
+| `get_orders.py` | Core order extraction and CSV generation | Daily / scheduled |
+| `update_grounded.py` | Aggregates CSV output and pushes values to the API | Daily / scheduled |
+| `daily_update.sh` | Wrapper for the full automated run | Cron |
+| `get_locations.py` | Retrieves Square Location IDs | Setup / one-time |
+| `list_discounts.py` | Lists catalog discounts | Setup / troubleshooting |
+| `list_categories.py` | Lists catalog categories | Setup / troubleshooting |
+| `check_categories.py` | Checks category coverage | Diagnostics |
+| `calc_portion_discounts.py` | Quick student-related ratio check | Diagnostics |
+| `.env` | Storage for Square and API credentials | Runtime |
