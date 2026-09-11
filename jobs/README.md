@@ -1,8 +1,13 @@
 # Grounded Cafe Square Data Pipeline
 
-This folder contains the scripts used to pull Grounded Cafe's Square order data, normalise it into a clean CSV, and publish the aggregated impact stats to the API service.
+This folder holds the scheduled half of the Grounded Cafe pipeline: pulling Square order
+data, normalising it into a clean CSV, and publishing the aggregated impact stats to the
+API service. Everything here runs from cron.
 
-The project now includes a small set of related scripts for discovery, data export, validation, and automation. The main flow is:
+The manual setup and troubleshooting commands live in `tools/diagnostics.py`, documented
+in `tools/README.md`.
+
+The main flow is:
 
 1. Pull the relevant orders from Square
 2. Convert and classify the line items
@@ -12,18 +17,14 @@ The project now includes a small set of related scripts for discovery, data expo
 
 ## Scripts in this folder
 
-- `get_orders.py` — main data pull script. Queries Square for completed orders, paginates through all results, matches tracked discounts, categorises items, and writes `grounded_cafe_orders.csv`.
+- `get_orders.py` — main data pull script. Queries Square for completed orders, paginates through all results, matches tracked discounts, categorises items, and writes `data/grounded_cafe_orders.csv`.
 - `update_grounded.py` — reads the generated CSV and pushes the aggregated values to the `grounded` handle on the API service.
 - `daily_update.sh` — wrapper script used by cron. Runs the order pull and then the Grounded update in sequence, aborting if the Square data fetch fails.
-- `get_locations.py` — retrieves the Square location list so the correct `SQUARE_LOCATION_ID` can be identified.
-- `list_discounts.py` — lists configured discounts from the Square catalog so you can confirm the tracked discount IDs used in the pipeline.
-- `list_categories.py` — lists any catalog categories currently configured in Square.
-- `check_categories.py` — checks whether items in the Square catalog are assigned to categories; useful for diagnosing why the pipeline uses a manual item-to-category map.
-- `calc_portion_discounts.py` — small diagnostic script for calculating how many rows are student-related and what proportion of the CSV they represent.
 
 ## Prerequisites
 
-Run commands from within this `square/` folder.
+Each script resolves its paths from its own file location, so you can run them from any
+directory. The examples below assume the project root.
 
 - Python 3.9 or later
 - A Square production access token
@@ -39,7 +40,7 @@ pip install -r requirements.txt
 
 ## Environment setup
 
-Create a `.env` file in this folder with values like:
+Create a `.env` file in the project root with values like:
 
 ```env
 SQUARE_ACCESS_TOKEN=your_production_token_here
@@ -49,39 +50,17 @@ API_ADMIN_TOKEN=your_api_admin_token_here
 API_BASE_URL=http://127.0.0.1:55500
 ```
 
-`SQUARE_LOCATION_ID` is usually discovered first using `get_locations.py`.
+`SQUARE_LOCATION_ID` is usually discovered first using `python3 tools/diagnostics.py locations`.
 
-## Typical setup flow
+## Typical flow
 
-### 1. Find the Square location ID
+First-time setup (finding the location ID, confirming discount IDs, checking catalog
+categories) is done with `tools/diagnostics.py`. See `tools/README.md`.
 
-```bash
-python3 get_locations.py
-```
-
-This prints the list of locations on the account. Copy the Grounded Cafe location ID to `SQUARE_LOCATION_ID` in `.env`.
-
-### 2. Check the configured discounts
+### 1. Run the main data pull
 
 ```bash
-python3 list_discounts.py
-```
-
-Use this to confirm the exact discount IDs and names used by the pipeline, especially the tracked values in `get_orders.py`.
-
-### 3. Check catalog categories
-
-```bash
-python3 list_categories.py
-python3 check_categories.py
-```
-
-These are diagnostics. If Square item categories are not populated, the pipeline relies on the manual `ITEM_CATEGORY` lookup inside `get_orders.py`.
-
-### 4. Run the main data pull
-
-```bash
-python3 get_orders.py
+python3 jobs/get_orders.py
 ```
 
 This script:
@@ -92,36 +71,36 @@ This script:
 - converts timestamps from UTC to `Australia/Hobart` time
 - matches tracked discounts such as `Student Discount` and `Paid Forward Redemption`
 - normalises and classifies item names like `Coffee`, `Drink`, `Food`, `Exclude`, or `Unmapped`
-- writes the results to `grounded_cafe_orders.csv`
+- writes the results to `data/grounded_cafe_orders.csv`
 
 The CSV is overwritten on each run, rather than appended to.
 
-### 5. Aggregate and push the numbers
+### 2. Aggregate and push the numbers
 
 ```bash
-python3 update_grounded.py
+python3 jobs/update_grounded.py
 ```
 
 This reads the CSV and pushes the aggregated values to the API service with the admin token. In production, the intended entry point is normally `daily_update.sh`.
 
-### 6. The scheduled cron job
+### 3. The scheduled cron job
 
 ```bash
-./daily_update.sh
+./jobs/daily_update.sh
 ```
 
 This is the script used to automate the daily run. It does the following:
 
 ```bash
-python3 get_orders.py
-python3 update_grounded.py
+python3 jobs/get_orders.py
+python3 jobs/update_grounded.py
 ```
 
 It exits early if the order pull fails so stale numbers are not published.
 
 ## Output file
 
-`grounded_cafe_orders.csv` is the main output of the pipeline. It contains one row per discounted or non-discounted line item, with fields such as:
+`data/grounded_cafe_orders.csv` is the main output of the pipeline. It contains one row per discounted or non-discounted line item, with fields such as:
 
 - `order_id`
 - `transaction_time`
@@ -155,9 +134,3 @@ The key settings live near the top of `get_orders.py`:
 | `get_orders.py` | Core order extraction and CSV generation | Daily / scheduled |
 | `update_grounded.py` | Aggregates CSV output and pushes values to the API | Daily / scheduled |
 | `daily_update.sh` | Wrapper for the full automated run | Cron |
-| `get_locations.py` | Retrieves Square Location IDs | Setup / one-time |
-| `list_discounts.py` | Lists catalog discounts | Setup / troubleshooting |
-| `list_categories.py` | Lists catalog categories | Setup / troubleshooting |
-| `check_categories.py` | Checks category coverage | Diagnostics |
-| `calc_portion_discounts.py` | Quick student-related ratio check | Diagnostics |
-| `.env` | Storage for Square and API credentials | Runtime |

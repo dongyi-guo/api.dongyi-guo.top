@@ -2,10 +2,16 @@ import os
 import csv
 import requests
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
-load_dotenv()
+# Paths are resolved from this file, not the working directory, so these
+# scripts behave the same whether cron or a human runs them.
+BASE_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = BASE_DIR / "data"
+
+load_dotenv(BASE_DIR / ".env")
 
 TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
 LOCATION_ID = os.getenv("SQUARE_LOCATION_ID")
@@ -21,9 +27,9 @@ HEADERS = {
 # No end_at set deliberately, so this always pulls up to "now" on each run.
 START_AT = "2026-06-09T00:00:00+10:00"
 
-OUTPUT_FILE = "grounded_cafe_orders.csv"
+OUTPUT_FILE = DATA_DIR / "grounded_cafe_orders.csv"
 
-# Catalog discount IDs, from list_discounts.py output.
+# Catalog discount IDs, from "diagnostics.py discounts" output.
 STUDENT_DISCOUNT_ID = "74MGXZC7LS5AFWV63C35D6HS"
 PAID_FORWARD_ID = "H7TH6PJXDDAPRJDK7HSB2YKD"
 
@@ -227,6 +233,7 @@ def fetch_all_orders():
 
 
 def write_csv(all_orders):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([

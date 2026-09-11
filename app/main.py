@@ -16,16 +16,22 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = Path(os.getenv("API_STATIC_DIR", BASE_DIR / "static"))
-STORE_PATH = Path(os.getenv("API_STORE_PATH", BASE_DIR / "api_store.json"))
+# This file lives in app/, so the project root is one level up. The site's
+# static files (index.html, styles/, scripts/) are served from that root.
+BASE_DIR = Path(__file__).resolve().parents[1]
+SITE_DIR = Path(os.getenv("API_SITE_DIR", BASE_DIR))
+STORE_PATH = Path(os.getenv("API_STORE_PATH", BASE_DIR / "data" / "api_store.json"))
 ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN", "")
 
 HANDLE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ATTRIBUTE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# Anything mounted or routed at the top level has to be reserved: a mount
+# shadows the /{handle} route, so a handle with the same name would be
+# unreachable rather than merely conflicting.
 RESERVED_HANDLES = {
     "_admin",
-    "admin-assets",
+    "styles",
+    "scripts",
     "docs",
     "redoc",
     "openapi.json",
@@ -74,8 +80,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-if STATIC_DIR.exists():
-    app.mount("/admin-assets", StaticFiles(directory=STATIC_DIR), name="admin-assets")
+for asset_dir in ("styles", "scripts"):
+    path = SITE_DIR / asset_dir
+    if path.exists():
+        app.mount(f"/{asset_dir}", StaticFiles(directory=path), name=asset_dir)
 
 
 def default_store() -> Dict[str, Dict[str, Any]]:
@@ -219,7 +227,7 @@ def handles_payload(store: Dict[str, Dict[str, Any]], **extra: Any) -> Dict[str,
 
 @app.get("/", include_in_schema=False)
 def home() -> FileResponse:
-    index_path = STATIC_DIR / "index.html"
+    index_path = SITE_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=500, detail=f"Missing admin page: {index_path}")
     return FileResponse(index_path)

@@ -7,7 +7,8 @@ __pycache__/
 *.so
 
 # This repo
-api_store.json
+data/
+logs/
 
 # Distribution / packaging
 .Python
@@ -176,6 +177,11 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# Claude and Agentic AIs
+CLAUDE.md
+AGENTS.md
+docs/agents
+
 # Cursor  
 #  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
@@ -186,6 +192,3 @@ cython_debug/
 
 # macOS
 .DS_Store
-
-# Project
-grounded_cafe_orders.csv

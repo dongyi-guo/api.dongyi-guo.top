@@ -1,15 +1,21 @@
 import csv
 import os
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
-_ = load_dotenv()
+# Paths are resolved from this file, not the working directory, so these
+# scripts behave the same whether cron or a human runs them.
+BASE_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = BASE_DIR / "data"
+
+load_dotenv(BASE_DIR / ".env")
 
 API_ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:55500")
 
-CSV_PATH = "grounded_cafe_orders.csv"
+CSV_PATH = DATA_DIR / "grounded_cafe_orders.csv"
 
 REDEMPTION_ITEMS = {"Student Meal", "Student Drink"}
 PAID_FORWARD_DISCOUNT = "Paid Forward Redemption"
