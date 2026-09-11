@@ -19,6 +19,8 @@ The main flow is:
 
 - `get_orders.py` — main data pull script. Queries Square for completed orders, paginates through all results, matches tracked discounts, categorises items, and writes `data/grounded_cafe_orders.csv`.
 - `update_grounded.py` — reads the generated CSV and pushes the aggregated values to the `grounded` handle on the API service.
+- `update_social_cafe.py` — reads the same CSV for trading statistics (orders per hour, price per order and the totals behind them) and pushes them to the `social-cafe` handle. Kept separate from `update_grounded.py` because the two count orders differently: see `CONTEXT.md`.
+- `api_client.py` — shared push helper used by both, so create-if-missing lives in one place.
 - `daily_update.sh` — wrapper script used by cron. Runs the order pull and then the Grounded update in sequence, aborting if the Square data fetch fails.
 
 ## Prerequisites
@@ -79,6 +81,7 @@ The CSV is overwritten on each run, rather than appended to.
 
 ```bash
 python3 jobs/update_grounded.py
+python3 jobs/update_social_cafe.py
 ```
 
 This reads the CSV and pushes the aggregated values to the API service with the admin token. In production, the intended entry point is normally `daily_update.sh`.
@@ -94,6 +97,7 @@ This is the script used to automate the daily run. It does the following:
 ```bash
 python3 jobs/get_orders.py
 python3 jobs/update_grounded.py
+python3 jobs/update_social_cafe.py
 ```
 
 It exits early if the order pull fails so stale numbers are not published.

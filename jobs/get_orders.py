@@ -17,6 +17,7 @@ TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
 LOCATION_ID = os.getenv("SQUARE_LOCATION_ID")
 
 URL = "https://connect.squareup.com/v2/orders/search"
+CATALOG_URL = "https://connect.squareup.com/v2/catalog/list"
 HEADERS = {
     "Square-Version": "2026-05-20",
     "Authorization": f"Bearer {TOKEN}",
@@ -42,10 +43,51 @@ TRACKED_DISCOUNTS = {
 # not a discount on a normally priced item.
 REDEMPTION_ITEMS = {"Student Meal", "Student Drink"}
 
-# Built from actual order data (grounded_cafe_orders.csv), not the catalog listing,
-# since item names on orders drift from catalog names over time (typos, renames, spacing).
-# Names are normalised (stripped) before lookup - see normalise_item_name().
+# Square's own categories, mapped to the four buckets this pipeline reports in.
+# This is the PRIMARY source of an item's category: it is keyed on catalog IDs,
+# which don't change when somebody renames a product. Only ~25 category names to
+# maintain, against 120+ item names that drift constantly.
+#
+# "Coffee" and "Drink" are both counted as drinks downstream, so the split between
+# them is presentational only. "Exclude" means not a consumable sale.
+CATEGORY_BUCKET = {
+    "Hot Drinks": "Coffee",
+    "Iced Drinks": "Coffee",
+    "Teas": "Drink",
+    "Milkshakes": "Drink",
+    "Smoothies": "Drink",
+    "Mocktails": "Drink",
+    "Pre-Packaged Drinks": "Drink",
+    "Produced Drinks": "Drink",
+    "Drinks Menu": "Drink",
+    "Toasties": "Food",
+    "Pies": "Food",
+    "Sweet Muffins": "Food",
+    "Savoury Muffins": "Food",
+    "Croissants": "Food",
+    "Petite Fours": "Food",
+    "Cups": "Food",
+    "Parcels": "Food",
+    "Daily Specials": "Food",
+    "Fridge Cabinet Food": "Food",
+    "HotBox Cabinet Food": "Food",
+    "Above Cabinets Displays": "Food",
+    "Merchandise": "Exclude",
+    "Pay it forward": "Exclude",
+}
+
+# FALLBACK ONLY, for line items the catalog can no longer explain: products that
+# have since been deleted or archived, such as the Student Meal / Student Drink
+# items from the June 2026 launch. Historical orders still name them, but they no
+# longer exist in the catalog, so there is no ID to join on. Built from actual
+# order data, and names are normalised (stripped) before lookup.
 ITEM_CATEGORY = {
+    # Retired items: sold historically, no longer in the catalog, so no ID to join on.
+    "Fruit Cup": "Food",
+    "Salad of the Day": "Food",
+    "Catering": "Food",
+    "Turmeric Latte": "Coffee",
+
     # Coffee
     "~ Cappuccino ~": "Coffee",
     "Cappuccino": "Coffee",
@@ -169,6 +211,74 @@ def normalise_item_name(name):
     return name.strip() if name else name
 
 
+def fetch_catalog(types):
+    """Fetch catalog objects of the given types, following the cursor."""
+    objects = []
+    cursor = None
+
+    while True:
+        params = {"types": types}
+        if cursor:
+            params["cursor"] = cursor
+        response = requests.get(CATALOG_URL, headers=HEADERS, params=params)
+        response.raise_for_status()
+        data = response.json()
+        objects.extend(data.get("objects", []))
+        cursor = data.get("cursor")
+        if not cursor:
+            return objects
+
+
+def build_variation_categories():
+    """Map every catalog variation id to one of our buckets, via Square's category.
+
+    Order line items carry the variation id in catalog_object_id, so this is what
+    lets us categorise by ID instead of by name. Note the category lives on
+    `reporting_category` / `categories`; the older `category_id` field is
+    deprecated and reads as null, which is why this once looked like no item had
+    a category at all.
+    """
+    objects = fetch_catalog("ITEM,CATEGORY")
+    category_names = {
+        obj["id"]: obj.get("category_data", {}).get("name")
+        for obj in objects if obj.get("type") == "CATEGORY"
+    }
+
+    lookup = {}
+    unknown = set()
+
+    for obj in objects:
+        if obj.get("type") != "ITEM":
+            continue
+        data = obj.get("item_data", {})
+        reporting = data.get("reporting_category") or next(iter(data.get("categories") or []), None)
+        name = category_names.get(reporting["id"]) if reporting else None
+        bucket = CATEGORY_BUCKET.get(name)
+
+        if name and bucket is None:
+            unknown.add(name)
+        if bucket is None:
+            continue
+
+        for variation in data.get("variations", []):
+            lookup[variation["id"]] = bucket
+
+    if unknown:
+        print(f"WARNING: Square categories with no bucket in CATEGORY_BUCKET: {sorted(unknown)}")
+        print("         Their items fall back to the name map, or land as Unmapped.")
+
+    print(f"Catalog: {len(lookup)} variations categorised from Square")
+    return lookup
+
+
+def categorise(item, variation_categories):
+    """Category by catalog ID first, falling back to the name map, then Unmapped."""
+    by_id = variation_categories.get(item.get("catalog_object_id"))
+    if by_id:
+        return by_id
+    return ITEM_CATEGORY.get(normalise_item_name(item.get("name")), "Unmapped")
+
+
 def match_discount(order):
     """Map each order-level discount uid to its catalog discount name, only for tracked discounts."""
     uid_to_name = {}
@@ -232,7 +342,7 @@ def fetch_all_orders():
     return all_orders
 
 
-def write_csv(all_orders):
+def write_csv(all_orders, variation_categories):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -252,7 +362,7 @@ def write_csv(all_orders):
                 currency = item.get("total_money", {}).get("currency", "AUD")
                 item_name = item.get("name")
                 variation = item.get("variation_name")
-                category = ITEM_CATEGORY.get(normalise_item_name(item_name), "Unmapped")
+                category = categorise(item, variation_categories)
 
                 # An item can technically have multiple discounts applied; capture each as its own row.
                 applied = item.get("applied_discounts", [])
@@ -277,10 +387,12 @@ def main():
     if not TOKEN or not LOCATION_ID:
         raise SystemExit("Missing SQUARE_ACCESS_TOKEN or SQUARE_LOCATION_ID in .env")
 
+    variation_categories = build_variation_categories()
+
     orders = fetch_all_orders()
     print(f"Total orders retrieved: {len(orders)}")
 
-    write_csv(orders)
+    write_csv(orders, variation_categories)
     print(f"Wrote {len(orders)} orders to {OUTPUT_FILE}")
 
 

@@ -120,10 +120,11 @@ def categories():
 
 
 def coverage():
-    """Report how many catalog items actually reference a category.
+    """Report how many catalog items reference a category.
 
-    As of the last check this was 0 of 67, which is why get_orders.py
-    classifies items through its manual ITEM_CATEGORY map instead.
+    Reads `reporting_category`, falling back to the `categories` list. The older
+    `category_id` field is deprecated and always reads as null, and checking it
+    was why this once reported that no item had a category at all.
     """
     objects = fetch_catalog("ITEM,CATEGORY")
 
@@ -140,10 +141,11 @@ def coverage():
     for obj in items:
         item_data = obj.get("item_data", {})
         name = item_data.get("name")
-        category_id = item_data.get("category_id")
+        reporting = item_data.get("reporting_category") or next(iter(item_data.get("categories") or []), None)
+        category = category_names.get(reporting["id"]) if reporting else None
 
-        if category_id and category_id in category_names:
-            categorised.append((name, category_names[category_id]))
+        if category:
+            categorised.append((name, category))
         else:
             uncategorised.append(name)
 

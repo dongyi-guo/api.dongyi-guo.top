@@ -118,7 +118,9 @@ The Square work is split by how often it runs. `jobs/` is what cron touches, `to
 |---|---|
 | `jobs/daily_update.sh` | The script cron actually runs. Runs the two Python scripts below in order, and stops early if the Square data pull fails, to avoid publishing stale numbers. |
 | `jobs/get_orders.py` | Pulls the day's completed orders from Square, processes discounts and categories, writes `data/grounded_cafe_orders.csv` |
-| `jobs/update_grounded.py` | Reads that CSV, counts up the three stats, and pushes them to the `/grounded` API handle |
+| `jobs/update_grounded.py` | Reads that CSV, counts up the three impact stats, and pushes them to the `/grounded` API handle |
+| `jobs/update_social_cafe.py` | Reads the same CSV for trading statistics, and pushes them to the `/social-cafe` API handle |
+| `jobs/api_client.py` | Shared push helper. Creates a handle if it does not exist yet, updates it if it does |
 | `tools/diagnostics.py` | Diagnostic subcommands (`locations`, `discounts`, `categories`, `coverage`, `student-share`), not run automatically, used when setting up or troubleshooting |
 | `.env` | Holds all credentials this pipeline needs, in the project root |
 | `jobs/README.md`, `tools/README.md` | Technical documentation for the scripts themselves, more detailed than this handover document |
@@ -131,6 +133,20 @@ from anywhere:
 ```bash
 python3 tools/diagnostics.py coverage
 ```
+
+### Published handles
+
+| Handle | Answers | Keys |
+|---|---|---|
+| `/grounded` | How much was given away | `coffees_paid_forward`, `meals_paid_forward`, `student_discounts_saved` |
+| `/social-cafe` | How busy the café is and what an order brings in | `total_orders`, `orders_excluding_redemptions`, `total_revenue`, `trading_days`, `hours_per_day`, `avg_orders_per_hour`, `avg_price_per_order` |
+
+The two handles count orders differently, on purpose. See `CONTEXT.md` for the
+definitions. The averages are published unrounded, so a consumer such as the
+Break-Even Calculator keeps full precision and does its own formatting.
+
+Both handles are created automatically on first push, so a fresh deployment
+needs no manual setup in the admin panel.
 
 ## Cron Job
 

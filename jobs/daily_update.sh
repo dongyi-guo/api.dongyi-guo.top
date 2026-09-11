@@ -19,5 +19,6 @@ if [ $? -ne 0 ]; then
 fi
 
 python3 jobs/update_grounded.py
+python3 jobs/update_social_cafe.py
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Done"

@@ -1,9 +1,9 @@
 import csv
-import os
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
+
+import api_client
 
 # Paths are resolved from this file, not the working directory, so these
 # scripts behave the same whether cron or a human runs them.
@@ -12,8 +12,7 @@ DATA_DIR = BASE_DIR / "data"
 
 load_dotenv(BASE_DIR / ".env")
 
-API_ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN")
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:55500")
+HANDLE = "grounded"
 
 CSV_PATH = DATA_DIR / "grounded_cafe_orders.csv"
 
@@ -55,30 +54,13 @@ def aggregate(csv_path):
     }
 
 
-def push_to_api(values: dict):
-    if not API_ADMIN_TOKEN:
-        raise SystemExit("Missing API_ADMIN_TOKEN in .env")
-
-    headers = {
-        "X-Admin-Token": API_ADMIN_TOKEN,
-        "Content-Type": "application/json",
-    }
-
-    for key, value in values.items():
-        url = f"{API_BASE_URL}/_admin/api/handles/grounded/attributes/{key}"
-        response = requests.put(url, headers=headers, json={"value": value})
-        if response.status_code >= 400:
-            print(f"Failed to update {key}: {response.status_code} {response.text}")
-        else:
-            print(f"Updated {key} = {value}")
-
-
 def main():
     values = aggregate(CSV_PATH)
     print(f"Aggregated: {values}")
 
     # If you are testing on your local machine, comment out the line below.
-    push_to_api(values)
+    # Creates the handle on a fresh deployment, updates it after that.
+    api_client.push(HANDLE, values)
 
 
 if __name__ == "__main__":
