@@ -120,6 +120,8 @@ The Square work is split by how often it runs. `jobs/` is what cron touches, `to
 | `jobs/get_orders.py` | Pulls the day's completed orders from Square, processes discounts and categories, writes `data/grounded_cafe_orders.csv` |
 | `jobs/update_grounded.py` | Reads that CSV, counts up the three impact stats, and pushes them to the `/grounded` API handle |
 | `jobs/update_social_cafe.py` | Reads the same CSV for trading statistics, and pushes them to the `/social-cafe` API handle |
+| `jobs/update_grounded_monthly.py` | Reads the same CSV and writes `data/grounded_monthly_summary.csv`, a month-by-month breakdown for reporting. Publishes nothing. `--month YYYY-MM` for one month, `--cumulative` for totals since opening |
+| `jobs/order_rows.py` | Shared CSV reading helpers, used by every script that reads the orders CSV |
 | `jobs/api_client.py` | Shared push helper. Creates a handle if it does not exist yet, updates it if it does |
 | `tools/diagnostics.py` | Diagnostic subcommands (`locations`, `discounts`, `categories`, `coverage`, `student-share`), not run automatically, used when setting up or troubleshooting |
 | `.env` | Holds all credentials this pipeline needs, in the project root |
@@ -158,6 +160,36 @@ Currently, this update happens 5pm everyday:
 
 ```
 0 17 * * * /home/admin/api.dongyi-guo.top/jobs/daily_update.sh >> /home/admin/api.dongyi-guo.top/logs/cron.log 2>&1
+```
+
+### Monthly summary
+
+A second, separate job writes the month-by-month reporting CSV. It publishes nothing, so it is
+deliberately not part of `daily_update.sh`: a failure here must never stop the daily figures,
+and it only needs to run once a month.
+
+It runs on the 1st at 5:30pm, half an hour after the daily job, so the orders CSV it reads has
+already been refreshed and the month just ended is complete:
+
+```
+30 17 1 * * /usr/bin/python3 /home/admin/api.dongyi-guo.top/jobs/update_grounded_monthly.py --month $(date -d yesterday +\%Y-\%m) >> /home/admin/api.dongyi-guo.top/logs/cron.log 2>&1
+```
+
+`--month` is required, so cron has to name one. Running on the 1st, *yesterday* is always the
+last day of the month just finished, which is the month to report. The `%` signs must be
+backslash-escaped in a crontab, or cron truncates the command at the first one.
+
+That `date -d` is GNU date, which is what the Linux server has. On macOS the equivalent is
+`date -v-1d +%Y-%m`, so don't copy this line straight into a local crontab.
+
+Install both with `crontab -e`. The CSV is rewritten in full each run and always holds every
+month, so running this by hand at any time is safe and never duplicates a month.
+
+By hand, it reports either view of any month:
+
+```bash
+python3 jobs/update_grounded_monthly.py --month 2026-07               # July alone
+python3 jobs/update_grounded_monthly.py --month 2026-07 --cumulative  # since 9 June
 ```
 
 ## Troubleshooting

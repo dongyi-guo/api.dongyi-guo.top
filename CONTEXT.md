@@ -12,19 +12,32 @@ one order. As of the September 2026 export, 10,154 rows were 7,141 orders.
 An order counts as an order even when it brought in no money. The ingredients
 were bought either way.
 
+## Donation
+
+A coffee or meal bought by a member of the public for a stranger to claim
+later. Money comes in and nothing is handed over. Donations come in two units,
+a **coffee** and a **meal**, each worth a fixed menu price at the time of sale.
+_Avoid_: pay-it-forward purchase, PIF sale, credit
+
 ## Redemption
 
-A free item that somebody else already paid for, through the pay-it-forward
-scheme. Recognised two ways, and both must be counted:
+A donated coffee or meal being handed over, free, to the student who claims
+it. Every redemption draws down an earlier donation.
+_Avoid_: pay-it-forward (ambiguous: it names the whole scheme, not either side
+of it), paid forward
 
-- a line carrying the **Paid Forward Redemption** discount, or
-- a **Student Meal** or **Student Drink** item, which are $0 catalog items used
-  during the June 2026 hard launch to record the same real-world act.
+## Banked
 
-Whether the hard-launch giveaway was genuinely donor-funded is **unresolved**.
-If it was funded by the café as a promotion, those items are marketing spend
-rather than redemptions, and the published impact figures would fall by about
-84%. Nobody currently knows. Do not "tidy" this either way without an answer.
+Donations not yet redeemed: coffees and meals the public has paid for that are
+still waiting to be claimed. Counted per unit, coffees and meals separately.
+
+## Not a redemption: institution-funded giveaways
+
+An item given away free because an institution covered the cost, such as TUSA
+paying for the 17 June 2026 night event, is **not** a redemption. Nobody from
+the public donated it, so no donation was drawn down. This covers the
+**Student Meal**, **Student Drink** and **TUSA After Dark** items. Decided
+September 2026; see `docs/adr/0001-institution-funded-giveaways-are-not-redemptions.md`.
 
 ## Not a redemption
 

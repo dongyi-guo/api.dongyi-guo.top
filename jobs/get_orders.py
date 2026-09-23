@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -29,19 +30,27 @@ HEADERS = {
 START_AT = "2026-06-09T00:00:00+10:00"
 
 OUTPUT_FILE = DATA_DIR / "grounded_cafe_orders.csv"
+# Every order exactly as Square returned it. The CSV is a flattened view and
+# will always leave something out; this is what to reach for when it does.
+RAW_OUTPUT_FILE = DATA_DIR / "grounded_cafe_orders_raw.json"
+
+# Joins several values in one CSV cell, e.g. a line carrying two discounts.
+# The downstream scripts split on exactly this string.
+MULTI_SEPARATOR = "; "
 
 # Catalog discount IDs, from "diagnostics.py discounts" output.
 STUDENT_DISCOUNT_ID = "74MGXZC7LS5AFWV63C35D6HS"
 PAID_FORWARD_ID = "H7TH6PJXDDAPRJDK7HSB2YKD"
 
-TRACKED_DISCOUNTS = {
+# EVERY discount is written to the CSV. These two are pinned to a fixed name
+# because the aggregation scripts match on them, and the till has shown the
+# student discount as both "Student Discount" and "Student Discount (20%)".
+# Any other discount is written under its current catalog name, or, for an
+# ad-hoc discount typed in at the till, the name on the order.
+PINNED_DISCOUNT_NAMES = {
     STUDENT_DISCOUNT_ID: "Student Discount",
     PAID_FORWARD_ID: "Paid Forward Redemption",
 }
-
-# Items that represent a $0 redemption of a previously paid-forward item,
-# not a discount on a normally priced item.
-REDEMPTION_ITEMS = {"Student Meal", "Student Drink"}
 
 # Square's own categories, mapped to the four buckets this pipeline reports in.
 # This is the PRIMARY source of an item's category: it is keyed on catalog IDs,
@@ -72,6 +81,7 @@ CATEGORY_BUCKET = {
     "Fridge Cabinet Food": "Food",
     "HotBox Cabinet Food": "Food",
     "Above Cabinets Displays": "Food",
+    "Loaf / Loaves": "Food",
     "Merchandise": "Exclude",
     "Pay it forward": "Exclude",
 }
@@ -229,8 +239,12 @@ def fetch_catalog(types):
             return objects
 
 
-def build_variation_categories():
-    """Map every catalog variation id to one of our buckets, via Square's category.
+def build_catalog_lookups():
+    """Read the catalog once, returning what the CSV needs from it.
+
+    - variation id -> one of our buckets, via Square's category
+    - variation id -> Square's own category name, written to the CSV as-is
+    - discount id  -> the discount's current catalog name
 
     Order line items carry the variation id in catalog_object_id, so this is what
     lets us categorise by ID instead of by name. Note the category lives on
@@ -238,13 +252,18 @@ def build_variation_categories():
     deprecated and reads as null, which is why this once looked like no item had
     a category at all.
     """
-    objects = fetch_catalog("ITEM,CATEGORY")
+    objects = fetch_catalog("ITEM,CATEGORY,DISCOUNT")
     category_names = {
         obj["id"]: obj.get("category_data", {}).get("name")
         for obj in objects if obj.get("type") == "CATEGORY"
     }
+    discount_names = {
+        obj["id"]: (obj.get("discount_data", {}).get("name") or "").strip()
+        for obj in objects if obj.get("type") == "DISCOUNT"
+    }
 
-    lookup = {}
+    buckets = {}
+    square_categories = {}
     unknown = set()
 
     for obj in objects:
@@ -257,18 +276,20 @@ def build_variation_categories():
 
         if name and bucket is None:
             unknown.add(name)
-        if bucket is None:
-            continue
 
         for variation in data.get("variations", []):
-            lookup[variation["id"]] = bucket
+            if name:
+                square_categories[variation["id"]] = name
+            if bucket:
+                buckets[variation["id"]] = bucket
 
     if unknown:
         print(f"WARNING: Square categories with no bucket in CATEGORY_BUCKET: {sorted(unknown)}")
         print("         Their items fall back to the name map, or land as Unmapped.")
 
-    print(f"Catalog: {len(lookup)} variations categorised from Square")
-    return lookup
+    print(f"Catalog: {len(buckets)} variations categorised from Square, "
+          f"{len(discount_names)} discounts")
+    return buckets, square_categories, discount_names
 
 
 def categorise(item, variation_categories):
@@ -277,16 +298,6 @@ def categorise(item, variation_categories):
     if by_id:
         return by_id
     return ITEM_CATEGORY.get(normalise_item_name(item.get("name")), "Unmapped")
-
-
-def match_discount(order):
-    """Map each order-level discount uid to its catalog discount name, only for tracked discounts."""
-    uid_to_name = {}
-    for d in order.get("discounts", []):
-        catalog_id = d.get("catalog_object_id")
-        if catalog_id in TRACKED_DISCOUNTS:
-            uid_to_name[d.get("uid")] = TRACKED_DISCOUNTS[catalog_id]
-    return uid_to_name
 
 
 def to_hobart(utc_timestamp):
@@ -342,58 +353,186 @@ def fetch_all_orders():
     return all_orders
 
 
-def write_csv(all_orders, variation_categories):
+# The first nine columns are the original ones, minus currency. Everything
+# after them was added so that no useful field Square returns is lost.
+CSV_COLUMNS = [
+    "order_id", "transaction_time", "item_name", "quantity", "variation",
+    "total_amount", "discount_name", "discount_saved", "category",
+    # Line detail
+    "record_type", "line_uid", "catalog_object_id", "square_category",
+    "base_price", "variation_total_price", "gross_sales", "total_discount",
+    "total_tax", "card_surcharge", "discount_amounts", "discount_ids",
+    "modifiers", "note",
+    # Order context, repeated on every line of the order
+    "closed_at", "tender_types",
+    # Returns only: which sale is being refunded, and why
+    "source_order_id", "source_line_uid", "refund_reason",
+]
+
+# record_type values. Only SALE rows are sales; the aggregation scripts must
+# filter on this, or refunds and empty orders leak into their counts.
+SALE, RETURN, EMPTY = "SALE", "RETURN", "EMPTY"
+
+
+def dollars(obj, key, sign=1):
+    """A Square money field in dollars. Square stores cents as integers."""
+    return sign * (obj.get(key) or {}).get("amount", 0) / 100
+
+
+def join(values):
+    return MULTI_SEPARATOR.join(str(v) for v in values)
+
+
+def describe_modifiers(modifiers):
+    """e.g. 'Oat (+0.50); Dine-In'. Free modifiers are named without a price."""
+    parts = []
+    for m in modifiers or []:
+        price = (m.get("total_price_money") or m.get("base_price_money") or {}).get("amount", 0)
+        name = (m.get("name") or "").strip()
+        parts.append(f"{name} (+{price / 100:.2f})" if price else name)
+    return join(parts)
+
+
+def line_discounts(line, uid_to_discount):
+    """(names, amounts, catalog ids) for every discount applied to one line.
+
+    A line can carry several discounts at once, e.g. "100%" on top of
+    "Student Discount". They share one row, in the same order across the
+    three columns, rather than duplicating the line once per discount.
+    """
+    names, amounts, ids = [], [], []
+    for a in line.get("applied_discounts", []):
+        name, catalog_id = uid_to_discount.get(a.get("discount_uid"), ("Unknown discount", ""))
+        names.append(name)
+        amounts.append(f"{a.get('applied_money', {}).get('amount', 0) / 100:.2f}")
+        ids.append(catalog_id or "")
+    return names, amounts, ids
+
+
+def discount_map(discounts, catalog_discount_names):
+    """uid -> (display name, catalog id) for an order's or a return's discounts."""
+    mapped = {}
+    for d in discounts or []:
+        catalog_id = d.get("catalog_object_id")
+        name = (
+            PINNED_DISCOUNT_NAMES.get(catalog_id)
+            or catalog_discount_names.get(catalog_id)
+            or (d.get("name") or "").strip()
+            or "Unnamed discount"
+        )
+        mapped[d.get("uid")] = (name, catalog_id)
+    return mapped
+
+
+def order_context(order):
+    return {
+        "order_id": order.get("id"),
+        "transaction_time": to_hobart(order["created_at"]) if order.get("created_at") else "",
+        "closed_at": to_hobart(order["closed_at"]) if order.get("closed_at") else "",
+        "tender_types": join(t.get("type") for t in order.get("tenders", [])),
+        "refund_reason": join(r.get("reason", "") for r in order.get("refunds", [])),
+    }
+
+
+def line_row(line, context, record_type, uid_to_discount, lookups, sign=1):
+    """One CSV row for a sale line (sign 1) or a returned line (sign -1).
+
+    Returns are written negative, quantity and money both, so summing a column
+    across sales and returns gives the net figure.
+    """
+    buckets, square_categories = lookups
+    names, amounts, ids = line_discounts(line, uid_to_discount)
+    quantity = float(line.get("quantity") or 0) * sign
+
+    return {
+        **context,
+        "item_name": line.get("name"),
+        "quantity": f"{quantity:g}",
+        "variation": line.get("variation_name"),
+        "total_amount": dollars(line, "total_money", sign),
+        "discount_name": join(names),
+        "discount_saved": dollars(line, "total_discount_money", sign),
+        "category": categorise(line, buckets),
+        "record_type": record_type,
+        "line_uid": line.get("uid"),
+        "catalog_object_id": line.get("catalog_object_id", ""),
+        "square_category": square_categories.get(line.get("catalog_object_id"), ""),
+        "base_price": dollars(line, "base_price_money"),
+        "variation_total_price": dollars(line, "variation_total_price_money", sign),
+        "gross_sales": dollars(line, "gross_sales_money", sign) or dollars(line, "gross_return_money", sign),
+        "total_discount": dollars(line, "total_discount_money", sign),
+        "total_tax": dollars(line, "total_tax_money", sign),
+        "card_surcharge": dollars(line, "total_service_charge_money", sign),
+        "discount_amounts": join(amounts),
+        "discount_ids": join(ids),
+        "modifiers": describe_modifiers(line.get("modifiers") or line.get("return_modifiers")),
+        "note": (line.get("note") or "").strip(),
+    }
+
+
+def build_rows(all_orders, lookups, catalog_discount_names):
+    for order in all_orders:
+        context = order_context(order)
+        uid_to_discount = discount_map(order.get("discounts"), catalog_discount_names)
+        line_items = order.get("line_items", [])
+
+        for line in line_items:
+            yield line_row(line, context, SALE, uid_to_discount, lookups)
+
+        # A refund arrives as its own order with no line_items, only returns.
+        # These used to be dropped, which left refunded sales counted as sales.
+        for ret in order.get("returns", []):
+            return_discounts = discount_map(ret.get("return_discounts"), catalog_discount_names)
+            for line in ret.get("return_line_items", []):
+                row = line_row(line, context, RETURN, return_discounts, lookups, sign=-1)
+                row["source_order_id"] = ret.get("source_order_id", "")
+                row["source_line_uid"] = line.get("source_line_item_uid", "")
+                yield row
+
+        # An order with neither, e.g. opening the cash drawer (a NO_SALE
+        # tender). Written so the row count matches Square, never counted.
+        if not line_items and not order.get("returns"):
+            yield {**context, "record_type": EMPTY, "quantity": "0", "total_amount": 0}
+
+
+def write_csv(all_orders, lookups, catalog_discount_names):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    counts = {SALE: 0, RETURN: 0, EMPTY: 0}
+
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "order_id", "transaction_time", "item_name", "quantity", "variation",
-            "total_amount", "currency", "discount_name", "discount_saved", "category"
-        ])
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS, restval="")
+        writer.writeheader()
+        for row in build_rows(all_orders, lookups, catalog_discount_names):
+            counts[row["record_type"]] += 1
+            writer.writerow(row)
 
-        for order in all_orders:
-            order_id = order.get("id")
-            created_at_raw = order.get("created_at")
-            created_at_hobart = to_hobart(created_at_raw) if created_at_raw else ""
-            uid_to_name = match_discount(order)
+    return counts
 
-            for item in order.get("line_items", []):
-                total = item.get("total_money", {}).get("amount", 0)
-                currency = item.get("total_money", {}).get("currency", "AUD")
-                item_name = item.get("name")
-                variation = item.get("variation_name")
-                category = categorise(item, variation_categories)
 
-                # An item can technically have multiple discounts applied; capture each as its own row.
-                applied = item.get("applied_discounts", [])
-                tracked_applied = [a for a in applied if a.get("discount_uid") in uid_to_name]
-
-                if not tracked_applied:
-                    writer.writerow([
-                        order_id, created_at_hobart, item_name, item.get("quantity"), variation,
-                        total / 100, currency, "", 0, category
-                    ])
-                else:
-                    for a in tracked_applied:
-                        discount_name = uid_to_name[a.get("discount_uid")]
-                        saved = a.get("applied_money", {}).get("amount", 0)
-                        writer.writerow([
-                            order_id, created_at_hobart, item_name, item.get("quantity"), variation,
-                            total / 100, currency, discount_name, saved / 100, category
-                        ])
+def write_raw(all_orders):
+    """Snapshot every order untouched, so the CSV is never the only record."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temp = RAW_OUTPUT_FILE.with_suffix(".json.tmp")
+    with open(temp, "w", encoding="utf-8") as f:
+        json.dump(all_orders, f)
+    os.replace(temp, RAW_OUTPUT_FILE)
 
 
 def main():
     if not TOKEN or not LOCATION_ID:
         raise SystemExit("Missing SQUARE_ACCESS_TOKEN or SQUARE_LOCATION_ID in .env")
 
-    variation_categories = build_variation_categories()
+    buckets, square_categories, discount_names = build_catalog_lookups()
 
     orders = fetch_all_orders()
     print(f"Total orders retrieved: {len(orders)}")
 
-    write_csv(orders, variation_categories)
-    print(f"Wrote {len(orders)} orders to {OUTPUT_FILE}")
+    write_raw(orders)
+    counts = write_csv(orders, (buckets, square_categories), discount_names)
+    print(f"Wrote {len(orders)} orders to {OUTPUT_FILE}: "
+          f"{counts[SALE]} sale lines, {counts[RETURN]} returned lines, "
+          f"{counts[EMPTY]} orders with no items")
+    print(f"Raw snapshot: {RAW_OUTPUT_FILE}")
 
 
 if __name__ == "__main__":

@@ -10,9 +10,11 @@ Definitions, agreed with the cafe:
 
 - An ORDER is one unique order_id. Every order counts toward total_orders,
   including the free ones: the ingredients were bought either way.
-- A REDEMPTION is a line covered by the Paid Forward Redemption discount, or
-  a Student Meal / Student Drink item. Same rule update_grounded.py uses, on
-  purpose: there should only ever be one definition of this in the project.
+- A REDEMPTION is a line covered by the Paid Forward Redemption discount, and
+  nothing else. Same rule update_grounded.py uses, on purpose: there should
+  only ever be one definition of this in the project. The Student Meal /
+  Student Drink items are NOT redemptions, because TUSA funded them rather
+  than a donor: see docs/adr/0001-institution-funded-giveaways-are-not-redemptions.md.
   An order is left out of the price average only when EVERY line in it is a
   redemption, because a donor already paid for it. An order that was free for
   any other reason (a comp, a loyalty freebie, a launch giveaway) stays in and
@@ -31,6 +33,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import api_client
+import order_rows
 
 # Paths are resolved from this file, not the working directory, so these
 # scripts behave the same whether cron or a human runs them.
@@ -45,12 +48,11 @@ HANDLE = "social-cafe"
 # Trading window: 8:00am to 2:45pm. Change this if the shop's hours change.
 HOURS_PER_DAY = 6.75
 
-REDEMPTION_ITEMS = {"Student Meal", "Student Drink"}
 PAID_FORWARD_DISCOUNT = "Paid Forward Redemption"
 
 
 def is_redemption(row: dict) -> bool:
-    return row.get("item_name") in REDEMPTION_ITEMS or row.get("discount_name") == PAID_FORWARD_DISCOUNT
+    return PAID_FORWARD_DISCOUNT in order_rows.discounts(row)
 
 
 def read_rows(csv_path: Path):
@@ -63,6 +65,10 @@ def read_rows(csv_path: Path):
     skipped = 0
     with open(csv_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
+            # Refunds and empty orders are in the CSV too. Trading figures are
+            # built from sales only, as they always were.
+            if not order_rows.is_sale(row):
+                continue
             try:
                 row["_time"] = dt.datetime.fromisoformat(row["transaction_time"])
                 row["_amount"] = float(row["total_amount"] or 0)

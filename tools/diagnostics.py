@@ -26,6 +26,10 @@ DATA_DIR = BASE_DIR / "data"
 
 load_dotenv(BASE_DIR / ".env")
 
+# The CSV's row format is defined next to the job that writes it.
+sys.path.insert(0, str(BASE_DIR / "jobs"))
+import order_rows  # noqa: E402
+
 TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
 
 LOCATIONS_URL = "https://connect.squareup.com/v2/locations"
@@ -182,8 +186,10 @@ def student_share():
 
     with handle as f:
         for row in csv.DictReader(f):
+            if not order_rows.is_sale(row):
+                continue
             total_rows += 1
-            if row["item_name"] in STUDENT_ITEMS or row["discount_name"] == STUDENT_DISCOUNT:
+            if row["item_name"] in STUDENT_ITEMS or STUDENT_DISCOUNT in order_rows.discounts(row):
                 student_related += 1
 
     if not total_rows:

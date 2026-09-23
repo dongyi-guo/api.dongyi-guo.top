@@ -16,11 +16,14 @@ python3 tools/diagnostics.py <command>
 | `locations` | Which Square locations exist, and what their IDs are. Use this to fill in `SQUARE_LOCATION_ID` during first-time setup. |
 | `discounts` | Which discounts are configured in the catalog, with their IDs and values. Use this to confirm the tracked IDs near the top of `jobs/get_orders.py`. |
 | `categories` | Which catalog categories exist on the account. |
-| `coverage` | How many catalog items actually have a category assigned. As of the last check this was 0 of 67, which is why the pipeline classifies items through the manual `ITEM_CATEGORY` map instead of asking Square. |
+| `coverage` | How many catalog items actually have a category assigned. As of the last check this was 89 of 90, the exception being Square's own demo item. Categories are the primary source of an item's bucket; `ITEM_CATEGORY` in `get_orders.py` is only a fallback for items no longer in the catalog. |
 | `student-share` | What share of the rows in the generated CSV are student-related. A rough volume check, not an impact number. |
 
-The four catalog commands need `SQUARE_ACCESS_TOKEN`. `student-share` needs no token, but
-does need `data/grounded_cafe_orders.csv`, so run `jobs/get_orders.py` first.
+## Monthly breakdown
+
+This moved into `jobs/update_grounded_monthly.py`, because it now runs on a schedule and this
+folder is for things that never do. It writes `data/grounded_monthly_summary.csv` and takes
+`--month YYYY-MM` and `--cumulative`. See `jobs/README.md`.
 
 ## Typical first-time setup
 
@@ -40,6 +43,7 @@ are not counted in the published totals. Check for them first:
 grep Unmapped data/grounded_cafe_orders.csv
 ```
 
-If unmapped rows show up, the fix is to add the new item name to `ITEM_CATEGORY` in
-`jobs/get_orders.py`. Item names drift between the Square catalog and live order data,
-including typos, so this map needs occasional hand maintenance.
+If unmapped rows show up, the usual cause is a new Square category with no entry in
+`CATEGORY_BUCKET` in `jobs/get_orders.py`; the script prints a loud warning naming it. Add it
+there. `ITEM_CATEGORY` is only for items that have since been deleted from the catalog, so
+there is no ID left to join on.

@@ -16,14 +16,21 @@ Square POS (external, not in this repo)
 jobs/get_orders.py               — pulls the day's orders from Square, writes a CSV
       ↓
 data/grounded_cafe_orders.csv    — working file, not served to anyone directly
+data/grounded_cafe_orders_raw.json — every order as Square returned it, nothing dropped
       ↓
 jobs/update_grounded.py          — aggregates the CSV into 3 impact numbers, pushes them
 jobs/update_social_cafe.py       — aggregates the same CSV into 7 trading numbers, pushes them
+jobs/update_grounded_monthly.py  — monthly, writes a reporting CSV, pushes NOTHING
       ↓
 app/main.py (FastAPI, on 127.0.0.1:55500, reverse-proxied by Nginx)
       ↓
 Grounded website's own JavaScript — fetches /grounded, renders the numbers
 ```
+
+`jobs/update_grounded_monthly.py` is the odd one out: it is the only job that publishes
+nothing. It writes `data/grounded_monthly_summary.csv` for reporting to the cafe and TUSA,
+on its own monthly cron line, deliberately not in `daily_update.sh` so a reporting failure
+can never stop the daily figures.
 
 `jobs/daily_update.sh` is the single cron entry point (runs at 5pm daily), it runs `get_orders.py` then `update_grounded.py` in sequence, and deliberately aborts before the push step if the Square fetch fails, to avoid publishing stale or incomplete data.
 
@@ -58,12 +65,14 @@ bare relative paths like `open("grounded_cafe_orders.csv")`.
 
 | File | Purpose | Run frequency |
 |---|---|---|
-| `get_orders.py` | Pulls paginated Square orders via `/v2/orders/search`, filters/sorts by `created_at`, converts timestamps to `Australia/Hobart`, matches tracked discounts, categorises items, writes `data/grounded_cafe_orders.csv` (full rewrite each run, not append) | Daily via cron |
+| `get_orders.py` | Pulls paginated Square orders via `/v2/orders/search`, filters/sorts by `created_at`, converts timestamps to `Australia/Hobart`, records every discount and refund, categorises items, writes `data/grounded_cafe_orders.csv` (one row per line item, full rewrite each run, not append) and `data/grounded_cafe_orders_raw.json` | Daily via cron |
 | `update_grounded.py` | Reads the CSV, aggregates `coffees_paid_forward`, `meals_paid_forward`, `student_discounts_saved`, pushes them to `/grounded` | Daily via cron, after `get_orders.py` |
 | `update_social_cafe.py` | Reads the same CSV for trading stats, pushes 7 values to `/social-cafe`. Counts orders differently from `update_grounded.py` **on purpose** | Daily via cron, after `update_grounded.py` |
 | `api_client.py` | Shared push helper: creates a handle if absent, updates it otherwise | Imported by both |
+| `order_rows.py` | Shared CSV reading: `is_sale()` skips `RETURN`/`EMPTY` rows, `discounts()` splits a line's several discounts. Every CSV reader must use it | Imported by all readers |
+| `update_grounded_monthly.py` | Reads the CSV, writes `data/grounded_monthly_summary.csv` (one row per month, monthly and cumulative columns). Publishes nothing. Requires `--month YYYY-MM`; `--cumulative` switches the printed view to totals since opening | Monthly via cron, 1st of the month |
 | `daily_update.sh` | Cron entry point. Resolves the project root from its own path, sources the root `.env`, runs both scripts in order, logs to `logs/cron.log`, aborts early if the fetch fails | Called by cron at 5pm daily |
-| `diagnostics.py` | All one-off diagnostics behind subcommands: `locations` (Square location IDs), `discounts` (configured discounts and their catalog IDs), `categories` (catalog categories on the account), `coverage` (what fraction of catalog items have a category assigned, as of last check 0 of 67), `student-share` (student-related share of the CSV rows). Paginates catalog reads via `cursor`, same as `get_orders.py` | As needed |
+| `diagnostics.py` | All one-off diagnostics behind subcommands: `locations` (Square location IDs), `discounts` (configured discounts and their catalog IDs), `categories` (catalog categories on the account), `coverage` (what fraction of catalog items have a category assigned, as of last check 89 of 90), `student-share` (student-related share of the CSV rows). Paginates catalog reads via `cursor`, same as `get_orders.py` | As needed |
 | `README.md` | Technical docs, one in each of `jobs/` and `tools/` |
 
 ## Critical domain knowledge (not obvious from the code)
@@ -76,8 +85,8 @@ reads as null. The live fields are `reporting_category` and `categories`. Checke
 own demo item.
 
 `get_orders.py` therefore categorises by **catalog ID**: order line items carry the variation
-id in `catalog_object_id`, `build_variation_categories()` maps every variation to its Square
-category, and `CATEGORY_BUCKET` translates ~23 Square category names into the four buckets
+id in `catalog_object_id`, `build_catalog_lookups()` maps every variation to its Square
+category, and `CATEGORY_BUCKET` translates ~24 Square category names into the four buckets
 this pipeline reports (`Coffee`, `Drink`, `Food`, `Exclude`). IDs survive renames, so this
 does not drift. A Square category with no entry in `CATEGORY_BUCKET` prints a loud warning.
 
@@ -93,11 +102,15 @@ silently uncounted. The remaining `Unmapped` rows are all line items with no nam
 custom amounts rung at the till with no product selected, worth about $1,700 in total. They
 cannot be categorised from the data, and that is the floor.
 
-**3. Two discount mechanisms are both treated as "paid forward", and both need to be counted together.**
-   - The `Paid Forward Redemption` discount (100% off), applied to a normally-priced item at the till.
-   - `Student Meal` / `Student Drink`, separate $0 catalog items used specifically during a hard-launch event in June 2026, recording the same real-world action a different way.
+**3. Only the `Paid Forward Redemption` discount is a redemption. `Student Meal` / `Student Drink` are NOT.**
+   Those $0 items (and `TUSA After Dark - Food/Drink`) were only ever used on the 17 June 2026
+   night event, which TUSA funded. They were once counted as redemptions, which made them about 70% of the
+   published figure and made June look like a boom. Decided September 2026 that they don't count, see
+   `docs/adr/0001-institution-funded-giveaways-are-not-redemptions.md`. Don't re-add them.
 
-   `update_grounded.py` counts a line item as "paid forward" if `item_name` is one of the redemption items **or** `discount_name == "Paid Forward Redemption"`, using OR logic (not summed separately) specifically to avoid double-counting a row that could technically satisfy both conditions.
+   The donation side is the `Pay-It Forward` item (variations `Regular Coffee`, `Meal`) and
+   `JJ's Personal Pay-it Forward Tracker` (a meal). Donations minus redemptions is **Banked**,
+   see `CONTEXT.md`.
 
 **4. `Student Discount` (a 20% off discount) is tracked separately and is NOT the same thing as the redemption items above.** It applies to normally-priced purchases by currently enrolled students, unrelated to the pay-it-forward mechanism. Do not merge these two concepts when editing aggregation logic.
 
@@ -118,14 +131,13 @@ ones, because staff made the drink either way, but exclude wholly-redeemed order
 price average because a donor already paid. Two denominators, one file each, commented in
 both. Don't "fix" the inconsistency. `CONTEXT.md` is the source of truth for these terms.
 
-**10. Only 2 of the 6 Square discounts are tracked.** `Student Discount` and `Paid Forward
-Redemption` are matched by catalog ID; `100%`, `Half-Price`, `U-Connect Staff` and `Loyalty
-Card Freebie` are not, so a line discounted with one of those arrives with a blank
-`discount_name` and looks like it simply cost nothing. 317 such lines exist, 265 of them on
-the 17 June hard launch. Worse, staff often zero the price manually instead of applying any
-discount, which leaves no marker at all. Published impact figures are therefore probably
-low, by an unknown amount. Adding the four missing IDs to `TRACKED_DISCOUNTS` is the
-starting point, but it cannot recover manual price overrides.
+**10. Every Square discount is now recorded, but manual $0 overrides still can't be seen.**
+`get_orders.py` once kept only `Student Discount` and `Paid Forward Redemption`, so `100%`,
+`Half-Price`, `U-Connect Staff` and `Loyalty Card Freebie` lines arrived with a blank
+`discount_name` and looked like they simply cost nothing. Fixed September 2026: all discounts
+are written. A line with several shares one row, joined with `; ` in `discount_name` and
+`discount_amounts`. Staff sometimes zero the price manually with no discount at all, which
+still leaves no marker, but `base_price` now shows what the item was worth.
 
 ## Credentials (`.env`, project root)
 
