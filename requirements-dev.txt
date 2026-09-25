@@ -1,0 +1,4 @@
+# Development only, not needed to run the service or the cron jobs.
+#   python3 -m pip install -r requirements-dev.txt
+#   python3 -m pytest
+pytest

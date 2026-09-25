@@ -150,6 +150,20 @@ Break-Even Calculator keeps full precision and does its own formatting.
 Both handles are created automatically on first push, so a fresh deployment
 needs no manual setup in the admin panel.
 
+## Tests
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+python3 -m pytest
+```
+
+They cover the counting rules, not the Square API: every test builds a small CSV or a few
+order dicts in memory, so the suite needs no credentials and no network.
+
+The rules under test are the ones that have actually been wrong before: which lines are
+redemptions, counting items rather than rows, a line carrying several discounts, refunds not
+counting as sales, and the monthly totals still summing to what `/grounded` publishes.
+
 ## Cron Job
 
 A cron job is a scheduled repeating task that set in desired time point, interval and many other configuring flexibilities.

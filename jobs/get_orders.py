@@ -253,8 +253,10 @@ def build_catalog_lookups():
     a category at all.
     """
     objects = fetch_catalog("ITEM,CATEGORY,DISCOUNT")
+    # Always a string, never None: an unnamed category reads as "", which
+    # simply matches nothing in CATEGORY_BUCKET.
     category_names = {
-        obj["id"]: obj.get("category_data", {}).get("name")
+        obj["id"]: (obj.get("category_data", {}).get("name") or "").strip()
         for obj in objects if obj.get("type") == "CATEGORY"
     }
     discount_names = {
@@ -271,7 +273,7 @@ def build_catalog_lookups():
             continue
         data = obj.get("item_data", {})
         reporting = data.get("reporting_category") or next(iter(data.get("categories") or []), None)
-        name = category_names.get(reporting["id"]) if reporting else None
+        name = category_names.get(reporting["id"], "") if reporting else ""
         bucket = CATEGORY_BUCKET.get(name)
 
         if name and bucket is None:
@@ -527,12 +529,16 @@ def main():
     orders = fetch_all_orders()
     print(f"Total orders retrieved: {len(orders)}")
 
+    # Printed in the order the work happens, so a run that dies halfway says
+    # where it got to. The last line is the last step, not a hang.
     write_raw(orders)
+    print(f"Raw snapshot written to {RAW_OUTPUT_FILE}")
+
     counts = write_csv(orders, (buckets, square_categories), discount_names)
     print(f"Wrote {len(orders)} orders to {OUTPUT_FILE}: "
           f"{counts[SALE]} sale lines, {counts[RETURN]} returned lines, "
           f"{counts[EMPTY]} orders with no items")
-    print(f"Raw snapshot: {RAW_OUTPUT_FILE}")
+    print("Done.")
 
 
 if __name__ == "__main__":

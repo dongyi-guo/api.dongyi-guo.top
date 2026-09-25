@@ -23,7 +23,9 @@ def is_sale(row):
 def discounts(row):
     """{discount name: dollars saved} for every discount on this line."""
     names = [n for n in (row.get("discount_name") or "").split(SEPARATOR) if n]
-    amounts = (row.get("discount_amounts") or "").split(SEPARATOR)
+    raw_amounts = row.get("discount_amounts") or ""
+    # "".split(SEPARATOR) is [""], not [], which would look like one amount.
+    amounts = raw_amounts.split(SEPARATOR) if raw_amounts else []
 
     # A CSV from before discount_amounts existed had one discount per row,
     # with its amount in discount_saved.

@@ -40,6 +40,10 @@ from pathlib import Path
 
 import order_rows
 
+# Spelled out rather than read from __doc__, which is None when Python runs
+# with -OO and docstrings are stripped.
+DESCRIPTION = "Month-by-month reporting for the pay-it-forward scheme."
+
 # Paths are resolved from this file, not the working directory, so these
 # scripts behave the same whether cron or a human runs them.
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -215,7 +219,7 @@ def print_report(rows, cumulative):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument(
         "--month", metavar="YYYY-MM", required=True,
         help="the month to report, e.g. 2026-07",

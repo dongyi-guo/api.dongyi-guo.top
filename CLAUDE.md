@@ -45,6 +45,7 @@ Folders are split by **how a file is used**, not by language:
 | `jobs/` | Everything cron runs, and only that |
 | `tools/` | Run by hand, never scheduled |
 | `data/`, `logs/` | Runtime output, both gitignored, both created on demand |
+| `tests/` | pytest suite, run by hand. Never scheduled, never imported by anything in `jobs/` |
 | `.env` | Credentials, in the project root, gitignored |
 
 Every script resolves its paths from `Path(__file__).resolve().parents[1]`, not the
@@ -57,6 +58,7 @@ bare relative paths like `open("grounded_cafe_orders.csv")`.
 |---|---|
 | `app/main.py` | FastAPI app. Handle CRUD, admin token auth via `secrets.compare_digest`, atomic writes (write-to-temp then `os.replace`) to avoid corruption, no in-memory caching (every request re-reads the store file from disk) |
 | `requirements.txt` | All dependencies for the whole project: FastAPI and Uvicorn for the service, `requests` and `python-dotenv` for the jobs and tools |
+| `requirements-dev.txt` | `pytest`, for the test suite only. Deliberately separate: the server never needs it |
 | `data/api_store.json` | Runtime-generated data store. Gitignored. Structure: `{"handle_name": {"key": "value", ...}}`, one flat layer only, nested objects/arrays are rejected by validation |
 | `index.html`, `styles/admin.css`, `scripts/admin.js` | Admin panel frontend. Unlocks with the admin token, allows manual CRUD on any handle |
 | `README.md` | Project-level setup docs (server, systemd, Nginx, cron) |
