@@ -4,8 +4,8 @@ Unlike the other jobs in this folder, this one publishes nothing. It reads
 `data/grounded_cafe_orders.csv` and writes `data/grounded_monthly_summary.csv`,
 one row per calendar month, for reporting to the cafe and to TUSA.
 
-    python3 jobs/update_grounded_monthly.py --month 2026-07
-    python3 jobs/update_grounded_monthly.py --month 2026-07 --cumulative
+    python3 grounded/update_grounded_monthly.py --month 2026-07
+    python3 grounded/update_grounded_monthly.py --month 2026-07 --cumulative
 
 --month is required: a report without a month on it invites being read as
 whatever the reader assumes. Two views of that month, answering different
@@ -27,16 +27,15 @@ before:
              claimed. Only meaningful since opening, so it is always
              cumulative, in both views.
 
-Counting rules match jobs/update_grounded.py: items are counted by quantity,
-not by row, and the $0 Student Meal / Student Drink items from the
-TUSA-funded 17 June 2026 night event are never redemptions. See
+Redemptions are counted by the same rule update_grounded.py publishes, from
+order_rows.py: by quantity, not by row, and never the $0 Student Meal /
+Student Drink items from the TUSA-funded 17 June 2026 night event. See
 docs/adr/0001-institution-funded-giveaways-are-not-redemptions.md.
 """
 
 import argparse
 import csv
 from collections import defaultdict
-from pathlib import Path
 
 import order_rows
 
@@ -44,27 +43,14 @@ import order_rows
 # with -OO and docstrings are stripped.
 DESCRIPTION = "Month-by-month reporting for the pay-it-forward scheme."
 
-# Paths are resolved from this file, not the working directory, so these
-# scripts behave the same whether cron or a human runs them.
-BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "data"
-
-CSV_PATH = DATA_DIR / "grounded_cafe_orders.csv"
-OUTPUT_FILE = DATA_DIR / "grounded_monthly_summary.csv"
-
-PAID_FORWARD_DISCOUNT = "Paid Forward Redemption"
-STUDENT_DISCOUNT = "Student Discount"
+CSV_PATH = order_rows.CSV_PATH
+OUTPUT_FILE = order_rows.DATA_DIR / "grounded_monthly_summary.csv"
 
 # The donation side. "Pay-It Forward" carries the unit in its variation name;
 # the tracker item is one regular donor's own, and is always a meal.
 DONATION_ITEM = "Pay-It Forward"
 DONATION_TRACKER_ITEM = "JJ's Personal Pay-it Forward Tracker"
 COFFEE_VARIATION = "Regular Coffee"
-
-# Given away at the TUSA-funded night event on 17 June 2026. TUSA paid, so no
-# donation was drawn down: never redemptions. Counted only so the exclusion is
-# visible rather than silently missing.
-EXCLUDED_GIVEAWAY_ITEMS = {"Student Meal", "Student Drink"}
 
 OPENED_ON = "9 June 2026"
 
@@ -106,20 +92,20 @@ def aggregate_by_month(csv_path):
             if not month:
                 continue
 
-            # Names are stripped because live order data carries trailing
-            # whitespace the catalog does not.
-            item_name = (row.get("item_name") or "").strip()
-            category = row.get("category", "")
+            item_name = order_rows.item_name(row)
             line_discounts = order_rows.discounts(row)
-            # Count items, not rows: one row can be "2 x Chicken Toastie".
-            quantity = int(float(row.get("quantity") or 0))
+            quantity = order_rows.quantity(row)
 
             bucket = months[month]
 
-            bucket["student_discounts_saved"] += line_discounts.get(STUDENT_DISCOUNT, 0.0)
+            bucket["student_discounts_saved"] += line_discounts.get(
+                order_rows.STUDENT_DISCOUNT, 0.0
+            )
             bucket["all_discounts_saved"] += sum(line_discounts.values())
 
-            if item_name in EXCLUDED_GIVEAWAY_ITEMS:
+            # Counted only so the exclusion is visible rather than silently
+            # missing. order_rows.is_redemption already refuses them.
+            if item_name in order_rows.EXCLUDED_GIVEAWAY_ITEMS:
                 bucket["excluded_giveaway_items"] += quantity
                 continue
 
@@ -129,13 +115,9 @@ def aggregate_by_month(csv_path):
             elif item_name == DONATION_TRACKER_ITEM:
                 bucket["meals_purchased"] += quantity
 
-            if PAID_FORWARD_DISCOUNT in line_discounts:
-                if category in ("Coffee", "Drink"):
-                    bucket["coffees_redeemed"] += quantity
-                elif category == "Food":
-                    bucket["meals_redeemed"] += quantity
-                # An Unmapped or Exclude redemption is counted nowhere, same
-                # as in update_grounded.py. Check the CSV if totals look off.
+            unit = order_rows.redeemed_unit(row)
+            if unit:
+                bucket[f"{unit}_redeemed"] += quantity
 
     return months
 
@@ -178,7 +160,7 @@ def formatted(row):
 
 
 def write_csv(rows):
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=COLUMNS, restval="")
         writer.writeheader()

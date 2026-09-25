@@ -17,14 +17,18 @@ were bought either way.
 A coffee or meal bought by a member of the public for a stranger to claim
 later. Money comes in and nothing is handed over. Donations come in two units,
 a **coffee** and a **meal**, each worth a fixed menu price at the time of sale.
+The monthly report and the café's own statements call these **purchased**
+("18 meals purchased for students"); that means donations, never redemptions.
 _Avoid_: pay-it-forward purchase, PIF sale, credit
 
 ## Redemption
 
 A donated coffee or meal being handed over, free, to the student who claims
-it. Every redemption draws down an earlier donation.
+it. Every redemption draws down an earlier donation. Counted in items, not
+rows or dollars: one redemption of a $5 snack uses up a whole meal donation.
 _Avoid_: pay-it-forward (ambiguous: it names the whole scheme, not either side
-of it), paid forward
+of it), paid forward. The published keys `coffees_paid_forward` and
+`meals_paid_forward` predate this glossary and mean **redemptions**.
 
 ## Banked
 
@@ -46,6 +50,13 @@ loyalty freebies and launch giveaways are all free to the customer but were
 paid for by nobody: they cost the café money and earned none. The data usually
 cannot tell these apart, because the till records a manual price override with
 no discount attached at all.
+
+## Refund
+
+A sale reversed afterwards. Square records it as a separate order pointing
+back at the original sale. A refund is not an order and not a sale, and it
+does not undo a donation or a redemption in any published figure. Some
+"refunds" are the till moving a sale onto an invoice, not money going back.
 
 ## Student Discount
 

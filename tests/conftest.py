@@ -1,7 +1,7 @@
 """Shared test setup.
 
 The jobs are scripts, not an installed package, so they import each other by
-bare name (`import order_rows`). Putting jobs/ on the path lets the tests
+bare name (`import order_rows`). Putting grounded/ on the path lets the tests
 import them the same way the scripts do, rather than inventing a package
 layout the pipeline doesn't use.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(BASE_DIR / "jobs"))
+sys.path.insert(0, str(BASE_DIR / "grounded"))
 
 import get_orders  # noqa: E402
 

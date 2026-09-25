@@ -1,34 +1,26 @@
 """One-off diagnostics for the Grounded Cafe Square pipeline.
 
-Not part of the daily cron run. Use these when setting up credentials or
+Never scheduled: run by hand. Use these when setting up credentials or
 working out why the pipeline classified something the way it did.
 
-    python3 diagnostics.py locations       # Square location IDs
-    python3 diagnostics.py discounts       # catalog discounts and their IDs
-    python3 diagnostics.py categories      # catalog categories that exist
-    python3 diagnostics.py coverage        # how many items have a category
-    python3 diagnostics.py student-share   # student-related share of the CSV
+    python3 grounded/diagnostics.py locations       # Square location IDs
+    python3 grounded/diagnostics.py discounts       # catalog discounts and their IDs
+    python3 grounded/diagnostics.py categories      # catalog categories that exist
+    python3 grounded/diagnostics.py coverage        # how many items have a category
+    python3 grounded/diagnostics.py student-share   # student-related share of the CSV
 """
 
 import argparse
 import csv
 import os
 import sys
-from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
-# Paths are resolved from this file, not the working directory, so these
-# scripts behave the same whether cron or a human runs them.
-BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "data"
+import order_rows
 
-load_dotenv(BASE_DIR / ".env")
-
-# The CSV's row format is defined next to the job that writes it.
-sys.path.insert(0, str(BASE_DIR / "jobs"))
-import order_rows  # noqa: E402
+load_dotenv(order_rows.BASE_DIR / ".env")
 
 TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
 
@@ -40,9 +32,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-CSV_PATH = DATA_DIR / "grounded_cafe_orders.csv"
-STUDENT_ITEMS = ("Student Meal", "Student Drink")
-STUDENT_DISCOUNT = "Student Discount"
+CSV_PATH = order_rows.CSV_PATH
 
 
 def _get(url, params=None):
@@ -181,7 +171,7 @@ def student_share():
     try:
         handle = open(CSV_PATH, newline="")
     except FileNotFoundError:
-        print(f"{CSV_PATH} not found. Run jobs/get_orders.py first.")
+        print(f"{CSV_PATH} not found. Run grounded/get_orders.py first.")
         sys.exit(1)
 
     with handle as f:
@@ -189,7 +179,8 @@ def student_share():
             if not order_rows.is_sale(row):
                 continue
             total_rows += 1
-            if row["item_name"] in STUDENT_ITEMS or STUDENT_DISCOUNT in order_rows.discounts(row):
+            if (order_rows.item_name(row) in order_rows.EXCLUDED_GIVEAWAY_ITEMS
+                    or order_rows.STUDENT_DISCOUNT in order_rows.discounts(row)):
                 student_related += 1
 
     if not total_rows:

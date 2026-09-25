@@ -1,71 +1,81 @@
 # Dongyi's API Service
 
-This is my API service hub for other project's testing purposes, it serves dynamic, non-nested, flat JSON responses.
+A small web service that holds a few live numbers and hands them to other websites.
 
-Currently this API service is serving the automated [Impact Counter for Grounded Social Enterprise Café](https://www.groundedsocialenterprise.org/impact). TUSA / Grounded may want to migrate this, this README file will also provide all the necessary information.
+Right now it powers the [Impact Counter on the Grounded Social Enterprise Café website](https://www.groundedsocialenterprise.org/impact): how many coffees and meals the public has paid forward for students, and how much students have saved with their discount. Every day at 5pm the server reads the café's sales from Square (the café's till system), works out those numbers, and publishes them. Nobody has to type anything in.
 
-## Project Structure
+TUSA / Grounded may take this over one day, so this README covers everything needed to run it.
+
+## How it works, in one picture
 
 ```
-index.html              Admin page, served at /
-styles/admin.css        Served at /styles/admin.css
-scripts/admin.js        Browser JavaScript, served at /scripts/admin.js
-app/main.py             The FastAPI service itself
-jobs/                   Everything cron runs: daily_update.sh, get_orders.py, update_grounded.py
-tools/diagnostics.py    Run by hand for setup and troubleshooting, never by cron
-data/                   Runtime files, gitignored: api_store.json, grounded_cafe_orders.csv
-logs/cron.log           Cron output, gitignored
-.env                    Credentials, gitignored
+Square (the café's till)
+      ↓   every day at 5pm, the server downloads the sales
+The server works out the numbers
+      ↓   and publishes them at a web address, e.g. api.dongyi-guo.top/grounded
+The Grounded website reads that address and shows the numbers to visitors
 ```
 
-Folders are split by how a file is used, not by what language it is written in.
-Anything under `jobs/` runs on a schedule; anything under `tools/` only runs when
-you run it. Both `data/` and `logs/` are created automatically on first use.
+Each set of numbers lives at its own address, called a **handle**. There are two:
 
-Each folder that holds scripts has its own README: `jobs/README.md` for the scheduled
-pipeline, `tools/README.md` for the manual diagnostics.
+| Address | What it shows |
+|---|---|
+| `/grounded` | Coffees and meals paid forward, and money saved by the student discount. This is what the public Impact Counter shows |
+| `/social-cafe` | How busy the café is: orders, revenue, orders per hour |
 
-## Saved API Handles and Values
+## What's in this folder
 
-Upon deployment of the API site, `data/api_store.json` will be generated to store saved handle and values, it is intentionally to be server-local. 
+| Folder or file | What it is |
+|---|---|
+| `app/` | The web service itself |
+| `index.html`, `styles/`, `scripts/` | The admin page, where you can view and edit numbers by hand |
+| `grounded/` | Everything for the Grounded Café: downloading sales, working out the numbers, publishing them |
+| `tests/` | Automatic checks that the numbers are worked out correctly |
+| `docs/` | Records of past decisions, and notes for AI assistants |
+| `data/`, `logs/` | Created by the server as it runs. Not stored in git |
+| `.env` | Passwords and keys. Never stored in git |
 
-A valid JSON will have structure as:
+## Setting it up on a new server
 
-```json
-{
-  "value": { // Public Handle
-    "value": 42 // Key / Value Pairs
-  }
-}
-```
+Everything below assumes the project lives at `/home/admin/api.dongyi-guo.top`. If yours lives somewhere else, change that path wherever it appears.
 
-The top-level key is the public handle, so this example serves `GET /value` and `POST /value`.
+### 1. Get a server and a domain name
 
-**Each handle value must be one flat object of key/value pairs. Nested objects and arrays are rejected.**
+You need a server that's always on, with a domain name pointing at it. There are easier options like [Hostinger](https://www.hostinger.com/au), and lots of server and domain providers. I use Amazon AWS EC2, but you can do it like a [CHAD](https://landchad.net/).
 
-If it is broken and the admin UI reports that `data/api_store.json` cannot be loaded, unlock with the admin token and use **Reset store**. The reset action backs up the broken file before writing the default `/value` handle.
-
-## Your Server
-
-You will need a server with a public domain name, there are easier options like [Hostinger](https://www.hostinger.com/au), and there are lots of server providers and domain providers. I use Amazon AWS EC2, but you can do it like a [CHAD](https://landchad.net/).
-
-## Python
-
-This service requires python, make sure you have python installed and created your virtual environment if required on your server. 
-
-Then install the dependencies:
+### 2. Copy the project over and install what it needs
 
 ```bash
+git clone <this repository> /home/admin/api.dongyi-guo.top
+cd /home/admin/api.dongyi-guo.top
 pip install -r requirements.txt
 ```
 
-## Nginx / Apache
+You need Python 3.9 or newer. `requirements.txt` is the full list of Python packages the project uses, all in one file.
 
-Use Nginx or Apache to setup this folder as web service, again, you can learn how to do it like a [CHAD](https://landchad.net/).
+### 3. Add the passwords file
 
-## System Service
+Create a file called `.env` in the project folder:
 
-You can write your own service file in your supported system service that your server uses such as `systemd` , `OpenRC`, `SysVinit` or `runit` as there are some environment values to fire up the project. I use `systemd` and wrote a `myapi.service`: 
+```
+SQUARE_ACCESS_TOKEN=      # Key to read the café's sales from Square
+SQUARE_SANDBOX_TOKEN=     # Square's test key (only for testing)
+SQUARE_LOCATION_ID=       # Which café in Square to read
+API_ADMIN_TOKEN=          # Your admin password for this service. Make one up
+API_BASE_URL=http://127.0.0.1:55500
+```
+
+**Why a separate file:** these are secrets. Keeping them out of the code means the code can be shared and stored in git without leaking them.
+
+If you don't know the location ID, this looks it up once the Square key is filled in:
+
+```bash
+python3 grounded/diagnostics.py locations
+```
+
+### 4. Keep the service running
+
+The server needs to start the service when it boots, and restart it if it ever crashes. On most Linux servers that's done by `systemd`. Create `/etc/systemd/system/myapi.service`:
 
 ```
 [Unit]
@@ -85,152 +95,130 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-Change as your need, make sure you put a token / password as you want, and change the absolute path based on your server.
-
-Two details matter here:
-
-- The app is `app.main:app`, not `main:app`, because `main.py` lives in `app/`. Getting
-  this wrong is the one mistake that takes the site down, with `Could not import module "main"`
-  in the journal and a 502 from Nginx.
-- There is no `API_STATIC_DIR`. The site files are served from `WorkingDirectory`.
-  Set `API_SITE_DIR` only if you keep them somewhere else.
-
-After any edit to this file run `sudo systemctl daemon-reload` before restarting, or
-systemd will keep using the version it already cached.
-
-## .env File
-
-In the project root, create an `.env` file so the project can read required private information:
-
-```
-SQUARE_ACCESS_TOKEN=      # Square production access token
-SQUARE_SANDBOX_TOKEN=     # Square sandbox token (for testing only)
-SQUARE_LOCATION_ID=       # Grounded Café's Square location ID
-API_ADMIN_TOKEN=          # Must match the token in myapi.service
-API_BASE_URL=http://127.0.0.1:55500   # Internal address of the API server
-```
-
-## Square API
-
-The Square work is split by how often it runs. `jobs/` is what cron touches, `tools/` is what you touch.
-
-| File | Purpose |
-|---|---|
-| `jobs/daily_update.sh` | The script cron actually runs. Runs the two Python scripts below in order, and stops early if the Square data pull fails, to avoid publishing stale numbers. |
-| `jobs/get_orders.py` | Pulls the day's completed orders from Square, processes discounts and categories, writes `data/grounded_cafe_orders.csv` |
-| `jobs/update_grounded.py` | Reads that CSV, counts up the three impact stats, and pushes them to the `/grounded` API handle |
-| `jobs/update_social_cafe.py` | Reads the same CSV for trading statistics, and pushes them to the `/social-cafe` API handle |
-| `jobs/update_grounded_monthly.py` | Reads the same CSV and writes `data/grounded_monthly_summary.csv`, a month-by-month breakdown for reporting. Publishes nothing. `--month YYYY-MM` for one month, `--cumulative` for totals since opening |
-| `jobs/order_rows.py` | Shared CSV reading helpers, used by every script that reads the orders CSV |
-| `jobs/api_client.py` | Shared push helper. Creates a handle if it does not exist yet, updates it if it does |
-| `tools/diagnostics.py` | Diagnostic subcommands (`locations`, `discounts`, `categories`, `coverage`, `student-share`), not run automatically, used when setting up or troubleshooting |
-| `.env` | Holds all credentials this pipeline needs, in the project root |
-| `jobs/README.md`, `tools/README.md` | Technical documentation for the scripts themselves, more detailed than this handover document |
-
-TLDR is: `get_orders.py` is the core retrieving all the transactions from Square API and generate a CSV file based on the information ( `data/grounded_cafe_orders.csv` ), `update_grounded.py` interprets the CSV file for the count, and update the count to the API service. `daily_update.sh` is the wrapper for both so run it will do both `.py` files.
-
-Every script resolves its paths from its own location, so you can run any of them
-from anywhere:
+Put the same admin password here as in `.env`, then start it:
 
 ```bash
-python3 tools/diagnostics.py coverage
+sudo systemctl daemon-reload
+sudo systemctl enable --now myapi
 ```
 
-### Published handles
+Two things to get right:
 
-| Handle | Answers | Keys |
-|---|---|---|
-| `/grounded` | How much was given away | `coffees_paid_forward`, `meals_paid_forward`, `student_discounts_saved` |
-| `/social-cafe` | How busy the café is and what an order brings in | `total_orders`, `orders_excluding_redemptions`, `total_revenue`, `trading_days`, `hours_per_day`, `avg_orders_per_hour`, `avg_price_per_order` |
+- **It must say `app.main:app`**, not `main:app`. This is the one mistake that takes the whole site down.
+- **Run `daemon-reload` after every edit to this file.** Without it, the server keeps using the old version.
 
-The two handles count orders differently, on purpose. See `CONTEXT.md` for the
-definitions. The averages are published unrounded, so a consumer such as the
-Break-Even Calculator keeps full precision and does its own formatting.
+### 5. Put it on the web
 
-Both handles are created automatically on first push, so a fresh deployment
-needs no manual setup in the admin panel.
+The service only listens inside the server, which keeps it private by default. To reach it from the internet, set up Nginx or Apache to pass your domain's visitors through to `127.0.0.1:55500`. Again, you can learn how to do it like a [CHAD](https://landchad.net/).
 
-## Tests
+### 6. Schedule the daily update
+
+Run `crontab -e` (the server's built-in scheduler) and add these two lines:
+
+```
+0 17 * * * /home/admin/api.dongyi-guo.top/grounded/daily_update.sh >> /home/admin/api.dongyi-guo.top/logs/cron.log 2>&1
+30 17 1 * * /usr/bin/python3 /home/admin/api.dongyi-guo.top/grounded/update_grounded_monthly.py --month $(date -d yesterday +\%Y-\%m) >> /home/admin/api.dongyi-guo.top/logs/cron.log 2>&1
+```
+
+- **The first line** runs every day at 5pm. It downloads the sales and publishes both sets of numbers. If the download fails, it stops before publishing anything. **Why:** a failed download would otherwise publish wrong numbers.
+- **The second line** runs on the 1st of each month at 5:30pm and writes a month-by-month report to `data/grounded_monthly_summary.csv`, for reporting to the café and TUSA. It publishes nothing. **Why it's separate:** if the report ever fails, the daily numbers still update. **Why 5:30pm:** it waits until the 5pm download has finished.
+- Everything they print goes to `logs/cron.log`. That's the first place to look if something seems off.
+
+Type the `\%` exactly as shown. Without the backslash, the scheduler cuts the line short.
+
+### 7. Check it worked
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
-python3 -m pytest
+./grounded/daily_update.sh                          # run the update now, instead of waiting for 5pm
+curl https://api.dongyi-guo.top/grounded            # should show the three numbers
 ```
 
-They cover the counting rules, not the Square API: every test builds a small CSV or a few
-order dicts in memory, so the suite needs no credentials and no network.
+The first run also creates `/grounded` and `/social-cafe`, so there's nothing to set up in the admin page.
 
-The rules under test are the ones that have actually been wrong before: which lines are
-redemptions, counting items rather than rows, a line carrying several discounts, refunds not
-counting as sales, and the monthly totals still summing to what `/grounded` publishes.
+## Updating the server after a change
 
-## Cron Job
-
-A cron job is a scheduled repeating task that set in desired time point, interval and many other configuring flexibilities.
-
-For updating the data from Square POS, counting the desired number, and updated to the Grounded website. A cron job can be set to make this automatically so the data fits the automatically updated date for Impact Counter.
-
-Currently, this update happens 5pm everyday:
-
-```
-0 17 * * * /home/admin/api.dongyi-guo.top/jobs/daily_update.sh >> /home/admin/api.dongyi-guo.top/logs/cron.log 2>&1
-```
-
-### Monthly summary
-
-A second, separate job writes the month-by-month reporting CSV. It publishes nothing, so it is
-deliberately not part of `daily_update.sh`: a failure here must never stop the daily figures,
-and it only needs to run once a month.
-
-It runs on the 1st at 5:30pm, half an hour after the daily job, so the orders CSV it reads has
-already been refreshed and the month just ended is complete:
-
-```
-30 17 1 * * /usr/bin/python3 /home/admin/api.dongyi-guo.top/jobs/update_grounded_monthly.py --month $(date -d yesterday +\%Y-\%m) >> /home/admin/api.dongyi-guo.top/logs/cron.log 2>&1
-```
-
-`--month` is required, so cron has to name one. Running on the 1st, *yesterday* is always the
-last day of the month just finished, which is the month to report. The `%` signs must be
-backslash-escaped in a crontab, or cron truncates the command at the first one.
-
-That `date -d` is GNU date, which is what the Linux server has. On macOS the equivalent is
-`date -v-1d +%Y-%m`, so don't copy this line straight into a local crontab.
-
-Install both with `crontab -e`. The CSV is rewritten in full each run and always holds every
-month, so running this by hand at any time is safe and never duplicates a month.
-
-By hand, it reports either view of any month:
+Whenever the code changes, on the server:
 
 ```bash
-python3 jobs/update_grounded_monthly.py --month 2026-07               # July alone
-python3 jobs/update_grounded_monthly.py --month 2026-07 --cumulative  # since 9 June
+cd /home/admin/api.dongyi-guo.top
+git status                      # should say "nothing to commit"
+git pull
+pip install -r requirements.txt
 ```
 
-## Troubleshooting
+**Why `git status` first:** if someone edited files directly on the server, `git pull` can clash with those edits. Better to find out before pulling.
 
-### 502 from Nginx
+If the change touched `app/`, also run `sudo systemctl restart myapi`. **Why:** the service loads its code once at startup. The daily update doesn't need a restart, because it runs fresh each time.
 
-Nginx is up but the app is not listening, which means the service failed to start:
+### One-off: moving from `jobs/` and `tools/` to `grounded/` (September 2026)
+
+The update scripts moved from `jobs/` and `tools/` into one folder, `grounded/`. A server that was set up before this move needs three extra steps after `git pull`:
+
+1. **Fix the schedule.** Run `crontab -e`, and in both lines change `/jobs/` to `/grounded/`. **Why:** the scheduler still points at the old folder, so the 5pm update will fail until you change it.
+2. **Delete the old folders.** Git removes the files it knows about, but can leave behind empty folders holding Python's cache files. Check they hold nothing else, then delete them:
+   ```bash
+   find jobs tools -type f        # should list only .pyc files, or nothing at all
+   rm -rf jobs tools
+   ```
+3. **Run the update once by hand** (step 7 above), so you know it works before 5pm.
+
+No restart is needed: the web service itself didn't change.
+
+## Using it day to day
+
+The numbers update themselves at 5pm. You only need the commands below if you want to look closer.
+
+**Get a month's report:**
+
+```bash
+python3 grounded/update_grounded_monthly.py --month 2026-07               # July alone
+python3 grounded/update_grounded_monthly.py --month 2026-07 --cumulative  # everything from opening to the end of July
+```
+
+**Refresh the numbers now** instead of waiting for 5pm:
+
+```bash
+./grounded/daily_update.sh
+```
+
+This publishes to the live website, exactly as the 5pm run does.
+
+**Edit a number by hand:** open the admin page at your domain, unlock it with the admin password, and change it there. The 5pm run will overwrite it again, so this is only for a quick fix.
+
+## When something goes wrong
+
+**The website shows "502 Bad Gateway".** The service isn't running. See why:
 
 ```bash
 sudo journalctl -u myapi -n 50 --no-pager
 ```
 
-`Could not import module "main"` means the unit is on the wrong command. `ExecStart` must
-say `app.main:app`, because `main.py` lives in `app/`. Fix it, then run
-`sudo systemctl daemon-reload` before starting again. The reload is the step that is easy
-to miss, and without it systemd keeps running the cached old unit.
+If it says `Could not import module "main"`, the service file says `main:app` where it should say `app.main:app` (step 4). Fix it, run `sudo systemctl daemon-reload`, then restart.
 
-### The impact numbers look too low
+**The numbers didn't update.** Look at the end of the log:
 
-Any item name the pipeline does not recognise is written to the CSV as `Unmapped` and is
-not counted in the published totals, deliberately, so it fails loudly rather than
-guessing. Check for them after a run:
+```bash
+tail -50 logs/cron.log
+```
+
+A line saying `get_orders.py failed, aborting` means Square couldn't be reached, or the Square key in `.env` has expired. Nothing wrong was published; the numbers just stayed as they were.
+
+**The numbers look too low.** Some items sold at the till might not be recognised as coffee or food. Check for them:
 
 ```bash
 grep Unmapped data/grounded_cafe_orders.csv
 ```
 
-The fix is to add the missing item name to `ITEM_CATEGORY` in `jobs/get_orders.py`. Item
-names drift between the Square catalog and live order data, including typos, so this map
-needs occasional hand maintenance.
+A few are normal: they're amounts typed in at the till without choosing a product. A lot of them usually means the café added a new category of product in Square. The update prints a warning naming it, and a developer needs to add it to the list in `grounded/get_orders.py`.
+
+**The admin page says the data can't be loaded.** Unlock it with the admin password and use **Reset store**. It backs up the broken file before starting fresh.
+
+## For developers and AI assistants
+
+- **`AGENTS.md`**: the technical detail. How the numbers are worked out, what's in each file, and the traps to avoid. Read this before changing any code.
+- **`CONTEXT.md`**: what the words mean. "Redemption", "banked" and "order" each have one exact meaning here.
+- **`docs/adr/`**: why past decisions were made, such as not counting the TUSA-funded giveaways from 17 June 2026.
+- **`docs/history.md`**: what was found in the café's data, and why the public numbers changed over time.
+- **`CLAUDE.md`**: one line pointing Claude Code to `AGENTS.md`.
+
+To run the automatic checks: `python3 -m pytest`. They need no passwords and no internet.

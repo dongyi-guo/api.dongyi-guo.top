@@ -3,16 +3,17 @@ import csv
 import json
 import requests
 from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
-# Paths are resolved from this file, not the working directory, so these
-# scripts behave the same whether cron or a human runs them.
-BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "data"
+import order_rows
+from order_rows import SALE, RETURN, EMPTY
 
-load_dotenv(BASE_DIR / ".env")
+# The CSV's location and format are shared with every script that reads it,
+# so they are defined in order_rows.py rather than here.
+DATA_DIR = order_rows.DATA_DIR
+
+load_dotenv(order_rows.BASE_DIR / ".env")
 
 TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
 LOCATION_ID = os.getenv("SQUARE_LOCATION_ID")
@@ -29,14 +30,10 @@ HEADERS = {
 # No end_at set deliberately, so this always pulls up to "now" on each run.
 START_AT = "2026-06-09T00:00:00+10:00"
 
-OUTPUT_FILE = DATA_DIR / "grounded_cafe_orders.csv"
+OUTPUT_FILE = order_rows.CSV_PATH
 # Every order exactly as Square returned it. The CSV is a flattened view and
 # will always leave something out; this is what to reach for when it does.
 RAW_OUTPUT_FILE = DATA_DIR / "grounded_cafe_orders_raw.json"
-
-# Joins several values in one CSV cell, e.g. a line carrying two discounts.
-# The downstream scripts split on exactly this string.
-MULTI_SEPARATOR = "; "
 
 # Catalog discount IDs, from "diagnostics.py discounts" output.
 STUDENT_DISCOUNT_ID = "74MGXZC7LS5AFWV63C35D6HS"
@@ -48,8 +45,8 @@ PAID_FORWARD_ID = "H7TH6PJXDDAPRJDK7HSB2YKD"
 # Any other discount is written under its current catalog name, or, for an
 # ad-hoc discount typed in at the till, the name on the order.
 PINNED_DISCOUNT_NAMES = {
-    STUDENT_DISCOUNT_ID: "Student Discount",
-    PAID_FORWARD_ID: "Paid Forward Redemption",
+    STUDENT_DISCOUNT_ID: order_rows.STUDENT_DISCOUNT,
+    PAID_FORWARD_ID: order_rows.PAID_FORWARD_DISCOUNT,
 }
 
 # Square's own categories, mapped to the four buckets this pipeline reports in.
@@ -371,18 +368,13 @@ CSV_COLUMNS = [
     "source_order_id", "source_line_uid", "refund_reason",
 ]
 
-# record_type values. Only SALE rows are sales; the aggregation scripts must
-# filter on this, or refunds and empty orders leak into their counts.
-SALE, RETURN, EMPTY = "SALE", "RETURN", "EMPTY"
-
-
 def dollars(obj, key, sign=1):
     """A Square money field in dollars. Square stores cents as integers."""
     return sign * (obj.get(key) or {}).get("amount", 0) / 100
 
 
 def join(values):
-    return MULTI_SEPARATOR.join(str(v) for v in values)
+    return order_rows.SEPARATOR.join(str(v) for v in values)
 
 
 def describe_modifiers(modifiers):

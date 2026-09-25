@@ -11,8 +11,8 @@ Definitions, agreed with the cafe:
 - An ORDER is one unique order_id. Every order counts toward total_orders,
   including the free ones: the ingredients were bought either way.
 - A REDEMPTION is a line covered by the Paid Forward Redemption discount, and
-  nothing else. Same rule update_grounded.py uses, on purpose: there should
-  only ever be one definition of this in the project. The Student Meal /
+  nothing else. Defined once, in order_rows.is_redemption, and shared with
+  update_grounded.py so the two can never disagree. The Student Meal /
   Student Drink items are NOT redemptions, because TUSA funded them rather
   than a donor: see docs/adr/0001-institution-funded-giveaways-are-not-redemptions.md.
   An order is left out of the price average only when EVERY line in it is a
@@ -35,24 +35,12 @@ from dotenv import load_dotenv
 import api_client
 import order_rows
 
-# Paths are resolved from this file, not the working directory, so these
-# scripts behave the same whether cron or a human runs them.
-BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "data"
+load_dotenv(order_rows.BASE_DIR / ".env")
 
-load_dotenv(BASE_DIR / ".env")
-
-CSV_PATH = DATA_DIR / "grounded_cafe_orders.csv"
 HANDLE = "social-cafe"
 
 # Trading window: 8:00am to 2:45pm. Change this if the shop's hours change.
 HOURS_PER_DAY = 6.75
-
-PAID_FORWARD_DISCOUNT = "Paid Forward Redemption"
-
-
-def is_redemption(row: dict) -> bool:
-    return PAID_FORWARD_DISCOUNT in order_rows.discounts(row)
 
 
 def read_rows(csv_path: Path):
@@ -95,7 +83,7 @@ def aggregate(csv_path: Path) -> dict:
     counted = {
         order_id: rows
         for order_id, rows in orders.items()
-        if not all(is_redemption(row) for row in rows)
+        if not all(order_rows.is_redemption(row) for row in rows)
     }
 
     total_revenue = sum(row["_amount"] for rows in orders.values() for row in rows)
@@ -126,7 +114,7 @@ def aggregate(csv_path: Path) -> dict:
 
 
 def main():
-    values = aggregate(CSV_PATH)
+    values = aggregate(order_rows.CSV_PATH)
     for key, value in values.items():
         print(f"  {key:30} {value}")
 
